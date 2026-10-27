@@ -1,0 +1,32 @@
+{
+  "id": "mandate",
+  "name": "Mandate",
+  "route": "/mandate",
+  "entry": "/apps/mandate/entry.js",
+  "version": "0.0.0",
+  "sdk": "^1.4.0",
+  "description": "Intent, passed down the floors: what we mean to achieve, and who holds each part",
+  "icon": "compass",
+  "floors": ["personal", "team", "org"],
+  "surfaces": [
+    { "floor": "personal", "slot": "card", "module": "./Glance" },
+    { "floor": "team", "slot": "card", "module": "./Glance" },
+    { "floor": "org", "slot": "card", "module": "./Glance" }
+  ],
+  "search": true,
+  "storage": { "database": true },
+  "scopes": ["audit:write", "people:read", "notifications:send", "events:publish"],
+  "handles": ["aim.open", "aim.pick", "mandate.open"],
+  "orbit": false,
+  "menu": [
+    {
+      "id": "intent",
+      "label": "Intent",
+      "icon": "compass",
+      "items": [
+        { "id": "floor", "label": "On this floor", "icon": "compass", "path": "/floor", "detail": "Intent set here, and parts passed down to it", "keywords": "operations orders mission" },
+        { "id": "yours", "label": "What you hold", "icon": "inbox", "path": "/yours", "detail": "Your parts, and what’s waiting for your back-brief", "keywords": "tasks mine back-brief" }
+      ]
+    }
+  ]
+}
