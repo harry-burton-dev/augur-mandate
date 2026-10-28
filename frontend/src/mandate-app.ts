@@ -369,7 +369,7 @@ export class MandateApp extends LitElement {
                     (e) => html`<span class="mandate-chip">
                       <button class="mandate-crumb" title=${e.from ? `From ${e.from}` : `Open in Data Atlas`} @click=${() => this.openEntity?.(e.entity)}>${e.entity.label || 'An entity'}</button>
                       ${can.bind && !e.from
-                        ? html`<button class="mandate-crumb mandate-unbind" aria-label=${`Unbind ${e.entity.label}`} @click=${() => this.act(() => this.api.unbindEntity(intent.id, e.entity.id, e.role))}>×</button>`
+                        ? html`<button class="mandate-crumb mandate-unbind" aria-label=${`Unbind ${e.entity.label || 'this entity'}`} @click=${() => this.act(() => this.api.unbindEntity(intent.id, e.entity.id, e.role))}>×</button>`
                         : nothing}
                     </span>`,
                   )}</span></div>`,
@@ -560,7 +560,7 @@ export class MandateApp extends LitElement {
       case 'pass': {
         if (!d) return nothing;
         const carry: SelectOption[] = [
-          ...d.entities.map((e) => ({ value: `e|${e.entity.id}|${e.role}`, label: e.entity.label, detail: ROLE_WORDS[e.role] ?? e.role })),
+          ...d.entities.map((e) => ({ value: `e|${e.entity.id}|${e.role}`, label: e.entity.label || 'An entity', detail: ROLE_WORDS[e.role] ?? e.role })),
           ...d.documents.map((x) => ({ value: `d|${x.document.app}|${x.document.id}`, label: x.document.title, detail: 'Document' })),
         ];
         return html`<ui-dialog open size="read" eyebrow=${`Pass down from ${d.intent.title}`} heading="Who holds this part?"

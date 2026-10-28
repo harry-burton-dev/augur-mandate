@@ -222,6 +222,12 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect((await t.call(engLead, 'GET', '/floor')).body.closed.map((x: { title: string }) => x.title)).toEqual(['Keep Halcyon and Corran at sea']);
   });
 
+  it('binds an entity sent without a label, as the shared reference allows', async () => {
+    const { op } = await alpha(t.call);
+    const bound = (await t.call(orgLead, 'POST', `/intents/${op.id}/entities`, { entity: { kind: 'entity', id: 'ent_yard', type: 'port' }, role: 'related' })).body;
+    expect(bound.entities).toContainEqual(expect.objectContaining({ entity: { kind: 'entity', id: 'ent_yard', type: 'port', label: '' }, role: 'related' }));
+  });
+
   it('marks one main effort among the parts', async () => {
     const { op, eng } = await alpha(t.call);
     const log = (await t.call(orgLead, 'POST', `/intents/${op.id}/pass`, { to: `team:${LOG}`, title: 'Stock Port Ardel' })).body;

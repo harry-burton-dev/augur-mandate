@@ -1,4 +1,6 @@
-import type { DocumentRef, MountContext } from '@augur/mfe-sdk';
+import type { DocumentRef, EntityRef, MountContext } from '@augur/mfe-sdk';
+
+export type { EntityRef };
 
 export type Life = 'draft' | 'passed' | 'active' | 'achieved' | 'superseded' | 'withdrawn';
 export type Rating = 'on_track' | 'at_risk' | 'blocked' | 'achieved';
@@ -74,14 +76,6 @@ export interface Rights {
   achieve: boolean;
   withdraw: boolean;
   mainEffort: boolean;
-}
-
-/** An entity from Data Atlas, as the shared reference has it. */
-export interface EntityRef {
-  kind: 'entity';
-  id: string;
-  type: string;
-  label: string;
 }
 
 export interface BackBrief {

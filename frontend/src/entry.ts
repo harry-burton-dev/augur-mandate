@@ -1,7 +1,7 @@
-import { IntentError, defineMicroFrontend, openDocument, pickDocument, type Intent, type MountContext } from '@augur/mfe-sdk';
+import { defineMicroFrontend, openDocument, openEntity, pickDocument, pickEntities, type EntityRef, type Intent, type MountContext } from '@augur/mfe-sdk';
 import { html, render } from 'lit';
 import '@augur/ui-kit';
-import { MandateApi, pathFor, placeFor, type EntityRef, type IntentRef, type Place } from './api.js';
+import { MandateApi, pathFor, placeFor, type IntentRef, type Place } from './api.js';
 import './mandate-app.js';
 import './mandate-glance.js';
 import './mandate-picker.js';
@@ -12,9 +12,6 @@ export const MANDATE_OPEN = 'mandate.open';
 export const AIM_OPEN = 'aim.open';
 /** Asks the person to pick an intent: answers with an IntentRef. A briefing tool bounds its context this way. */
 export const AIM_PICK = 'aim.pick';
-/** Data Atlas's intents, as the shared entity contract names them. */
-export const ENTITY_PICK = 'entity.pick';
-export const ENTITY_OPEN = 'entity.open';
 
 /** Where Mandate is in the address bar, so a place can be shared and Back goes to the last one. */
 export const addressFor = (pathname: string, mountedAt: string, place: Place) => {
@@ -29,15 +26,6 @@ export const placeForIntent = (intent: Intent | undefined): Place | undefined =>
   if (intent?.type === MANDATE_OPEN && typeof payload.path === 'string') return placeFor(payload.path);
   if (intent?.type === AIM_OPEN && typeof payload.id === 'string' && payload.id) return { view: 'intent', id: payload.id };
   return undefined;
-};
-
-const text = (v: unknown, max: number) => typeof v === 'string' && v.length > 0 && v.length <= max;
-
-/** An entity as Data Atlas answers `entity.pick`: one ref, or the first of a list. */
-export const entityFrom = (answer: unknown): EntityRef => {
-  const r = (Array.isArray(answer) ? answer[0] : answer) as Record<string, unknown> | undefined;
-  if (!r || r.kind !== 'entity' || !text(r.id, 200) || !text(r.type, 80) || !text(r.label, 300)) throw new IntentError('The picker answered with something that is not an entity.');
-  return { kind: 'entity', id: r.id as string, type: r.type as string, label: r.label as string };
 };
 
 const apiFor = (ctx: MountContext) => new MandateApi((path, init) => ctx.fetch(path, init));
@@ -74,9 +62,9 @@ export default defineMicroFrontend({
         floor-kind=${ctx.workspace.kind}
         .place=${placeForIntent(ctx.intent) ?? placeFor(ctx.path)}
         .pickDocument=${() => pickDocument(ctx, { purpose: 'Add to this intent as context' })}
-        .pickEntity=${async () => entityFrom(await ctx.request<unknown>({ type: ENTITY_PICK, payload: { multiple: false, purpose: 'Bind to this intent' } }))}
+        .pickEntity=${async () => (await pickEntities(ctx, { purpose: 'Bind to this intent' }))[0]!}
         .openDocument=${(ref: Parameters<typeof openDocument>[1]) => void openDocument(ctx, ref)}
-        .openEntity=${(ref: EntityRef) => void ctx.raise({ type: ENTITY_OPEN, payload: ref })}
+        .openEntity=${(ref: EntityRef) => void openEntity(ctx, ref)}
         @mandate-place=${moved}
       ></mandate-app>`,
       el,
