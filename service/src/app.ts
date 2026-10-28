@@ -100,7 +100,7 @@ const STATEMENT = {
 } as const;
 const ENTITY_REF = {
   type: 'object',
-  required: ['kind', 'id', 'type', 'label'],
+  required: ['kind', 'id', 'type'],
   properties: { kind: { const: 'entity' }, id: TEXT(200), type: TEXT(80), label: TEXT(300), at: TEXT(40) },
 } as const;
 const DOCUMENT_REF = {
@@ -706,7 +706,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
           if (!loaded.can.bind) return refuse(reply, 'Only whoever holds this intent can say what it’s about.');
           const { kind, id, type, label } = req.body.entity;
           await store.commit({
-            entityBindings: [{ intent: loaded.intent.id, entity: { kind, id, type, label }, role: req.body.role, boundBy: v.id, at: stamp() }],
+            entityBindings: [{ intent: loaded.intent.id, entity: { kind, id, type, label: label ?? '' }, role: req.body.role, boundBy: v.id, at: stamp() }],
             events: [event(TOPICS.entityBound, loaded.intent, { entity: id, role: req.body.role })],
           });
           return detailOf(v, loaded);

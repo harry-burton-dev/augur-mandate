@@ -1,6 +1,6 @@
 import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
 import { describe, expect, it, vi } from 'vitest';
-import app, { AIM_OPEN, AIM_PICK, MANDATE_OPEN, addressFor, entityFrom, placeForIntent } from './entry.js';
+import app, { AIM_OPEN, AIM_PICK, MANDATE_OPEN, addressFor, placeForIntent } from './entry.js';
 import type { MandateApp } from './mandate-app.js';
 import type { MandateGlance } from './mandate-glance.js';
 
@@ -30,7 +30,7 @@ const DETAIL = {
   below: [{ ...summary('a2', 'Refit Hull 4', { parent: 'a1', holder: 'person:jo', holderName: 'Jo Hart', life: 'passed' }), below: [] }],
   backBriefs: [],
   assessments: [{ id: 's1', byName: 'Dana Reyes', rating: 'at_risk', note: 'Two hulls in dock', at: new Date().toISOString() }],
-  entities: [{ entity: { kind: 'entity', id: 'ent_1', type: 'ship', label: 'HMS Example' }, role: 'subject', at: new Date().toISOString() }],
+  entities: [{ entity: { kind: 'entity', id: 'ent_01J0000000000000000000SHIP', type: 'ship', label: 'HMS Example' }, role: 'subject', at: new Date().toISOString() }],
   documents: [],
   recheck: false,
   assessmentDue: false,
@@ -76,13 +76,6 @@ describe('mandate', () => {
     expect(addressFor('/t/eng/mandate', '/', { view: 'yours' })).toBe('/t/eng/mandate/yours');
   });
 
-  it('takes an entity as Data Atlas answers, and refuses anything else', () => {
-    const ship = { kind: 'entity', id: 'ent_1', type: 'ship', label: 'HMS Example' };
-    expect(entityFrom(ship)).toEqual(ship);
-    expect(entityFrom([ship])).toEqual(ship);
-    expect(() => entityFrom({ kind: 'document', id: 'x' })).toThrow(/not an entity/);
-  });
-
   it('shows the floor’s intent, and clears up on unmount', async () => {
     const el = document.body.appendChild(document.createElement('div'));
     await app.mount(el, ctx());
@@ -102,7 +95,7 @@ describe('mandate', () => {
     await settle(view);
     for (const words of ['So the coast is watched', 'No overtime', 'Refit Hull 4', 'Two hulls in dock', 'HMS Example']) expect(view.textContent).toContain(words);
     [...view.querySelectorAll('button')].find((b) => b.textContent?.includes('HMS Example'))!.click();
-    expect(raise).toHaveBeenCalledWith({ type: 'entity.open', payload: { kind: 'entity', id: 'ent_1', type: 'ship', label: 'HMS Example' } });
+    expect(raise).toHaveBeenCalledWith({ type: 'entity.open', payload: { kind: 'entity', id: 'ent_01J0000000000000000000SHIP', type: 'ship', label: 'HMS Example' } });
   });
 
   it('says why entities can’t be bound while no app picks them, rather than hiding it', async () => {
@@ -117,7 +110,7 @@ describe('mandate', () => {
     const bind = [...view.querySelectorAll('ui-button')].find((b) => b.textContent?.includes('Bind an entity')) as HTMLElement & { disabled: boolean };
     bind.click();
     await settle(view);
-    expect(request).toHaveBeenCalledWith({ type: 'entity.pick', payload: { multiple: false, purpose: 'Bind to this intent' } });
+    expect(request).toHaveBeenCalledWith({ type: 'entity.pick', payload: { purpose: 'Bind to this intent' } });
     expect(bind.disabled).toBe(true);
     expect(view.textContent).toContain('Linking to entities arrives with Data Atlas.');
   });
