@@ -22,9 +22,9 @@
     {
       "id": "intent",
       "label": "Intent",
-      "icon": "compass",
+      "icon": "list",
       "items": [
-        { "id": "floor", "label": "On this floor", "icon": "compass", "path": "/floor", "detail": "Intent set here, and parts passed down to it", "keywords": "operations orders mission" },
+        { "id": "floor", "label": "On this floor", "icon": "org", "path": "/floor", "detail": "Intent set here, and parts passed down to it", "keywords": "operations orders mission" },
         { "id": "yours", "label": "What you hold", "icon": "inbox", "path": "/yours", "detail": "Your parts, and what’s waiting for your back-brief", "keywords": "tasks mine back-brief" }
       ]
     }
