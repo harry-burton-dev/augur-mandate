@@ -81,8 +81,9 @@ describe('mandate', () => {
     await app.mount(el, ctx());
     const view = el.querySelector('mandate-app')!;
     await settle(view);
-    expect(view.textContent).toContain('Keep the fleet at sea');
-    expect(view.textContent).toContain('1 at risk');
+    expect(view.querySelector('ui-card')!.heading).toBe('Keep the fleet at sea');
+    const tally = view.querySelector('ui-tally')!;
+    expect(tally.counts.find((c) => c.word === 'at risk')!.n).toBe(1);
     await app.unmount!(el);
     expect(el.querySelector('mandate-app')).toBeNull();
   });
