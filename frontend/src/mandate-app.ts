@@ -1,5 +1,5 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
-import { ago, type ButtonKind, type DialogSubmit, type ListItem, type PageAction, type PathStep, type SelectOption, type StatusName, type TimelineItem, type TreeItem } from '@augur/ui-kit';
+import { ago, dayName, plainText, type ButtonKind, type DialogSubmit, type ListItem, type PageAction, type PathStep, type SelectOption, type StatusName, type TimelineItem, type TreeItem } from '@augur/ui-kit';
 import type { DocumentRef } from '@augur/mfe-sdk';
 import {
   RATING_WORDS,
@@ -53,10 +53,10 @@ export const holderWords = (i: Pick<Summary, 'holder' | 'holderName' | 'floorNam
   i.holder === 'floor' ? `${i.holderName || i.floorName || 'This floor'}’s leads` : i.holderName || 'Someone';
 
 /** The statement's parts, in the order allied orders give them, with what each asks for. */
-export const PARTS: { key: Exclude<keyof Statement, 'keyTasks'> | 'keyTasks'; label: string; hint: string; required?: boolean }[] = [
-  { key: 'mission', label: 'Mission', hint: 'One line: who does what, when and where.' },
-  { key: 'purpose', label: 'Purpose', hint: 'Why: what it’s in order to achieve.', required: true },
-  { key: 'endState', label: 'End state', hint: 'What done looks like, so anyone can tell.', required: true },
+export const PARTS: { key: Exclude<keyof Statement, 'keyTasks'> | 'keyTasks'; label: string; hint: string; required?: boolean; guide?: string }[] = [
+  { key: 'mission', label: 'Mission', hint: 'One line: who does what, when and where.', guide: '1 sentence' },
+  { key: 'purpose', label: 'Purpose', hint: 'Why: what it’s in order to achieve.', required: true, guide: '2 sentences' },
+  { key: 'endState', label: 'End state', hint: 'What done looks like, so anyone can tell.', required: true, guide: '2 sentences' },
   { key: 'keyTasks', label: 'Key tasks', hint: 'What must be done for it to succeed. One a line.' },
   { key: 'constraints', label: 'Constraints', hint: 'What must be done, or kept to.' },
   { key: 'restraints', label: 'Restraints', hint: 'What must not be done.' },
@@ -211,7 +211,7 @@ export class MandateApp extends LitElement {
     const mark = markOf(i);
     const rest = counts ? counts.parts - counts.atRisk - counts.blocked : 0;
     return html`<ui-card heading=${i.title} status=${mark.status} status-label=${mark.label} floor-kind=${i.floorKind} floor-name=${i.floorName}
-      .meta=${[i.partOf ? `Part of ${i.partOf}` : '', holderWords(i), i.byDate ? `By ${i.byDate}` : ''].filter(Boolean)}
+      .meta=${[i.partOf ? `Part of ${i.partOf}` : '', holderWords(i), i.byDate ? `By ${dayName(i.byDate)}` : ''].filter(Boolean)}
       note=${i.ratingNote ?? ''} note-tone=${i.rating === 'blocked' ? 'danger' : i.rating === 'at_risk' ? 'warning' : 'ink'}
       @ui-open=${() => this.go({ view: 'intent', id: i.id })}>
       ${counts?.parts
@@ -251,7 +251,7 @@ export class MandateApp extends LitElement {
   private yoursView() {
     const yours = this.yours;
     if (!yours) return html`<ui-state kind="loading" heading="Loading what you hold"></ui-state>`;
-    const row = (i: Summary, status: StatusName, detail: string): ListItem => ({ id: i.id, title: i.title, detail, status, ...(i.byDate ? { meta: `By ${i.byDate}` } : {}) });
+    const row = (i: Summary, status: StatusName, detail: string): ListItem => ({ id: i.id, title: i.title, detail, status, ...(i.byDate ? { meta: `By ${dayName(i.byDate)}` } : {}) });
     const items: ListItem[] = [
       ...yours.passed.map((i) => ({ ...row(i, 'needs', `${i.partOf ? `Part of ${i.partOf} · ` : ''}Say it back to accept it`), group: 'Passed to you' })),
       ...yours.recheck.map((i) => ({ ...row(i, 'needs', `${i.partOf} has changed: check yours still fits`), group: 'Passed to you' })),
@@ -296,7 +296,7 @@ export class MandateApp extends LitElement {
     if (!parts.length) return html`<ui-note>Nothing written yet.</ui-note>`;
     return html`<dl class="mandate-statement">
       ${parts.map(
-        (p) => html`<div><dt>${p.label}</dt><dd>${p.key === 'keyTasks' ? html`<ul>${s.keyTasks.map((t) => html`<li>${t}</li>`)}</ul>` : s[p.key]}</dd></div>`,
+        (p) => html`<div><dt>${p.label}</dt><dd><ui-prose .value=${p.key === 'keyTasks' ? s.keyTasks.map((t) => `- ${t}`).join('\n') : s[p.key]}></ui-prose></dd></div>`,
       )}
     </dl>`;
   }
@@ -315,7 +315,7 @@ export class MandateApp extends LitElement {
       `held by ${holderWords(intent)}`,
       d.passed ? `passed down by ${d.passed.by}` : '',
       d.issued ? `version ${d.issued.version}, issued ${ago(d.issued.at)}` : 'not issued yet',
-      intent.byDate ? `by ${intent.byDate}` : '',
+      intent.byDate ? `by ${dayName(intent.byDate)}` : '',
     ].filter(Boolean);
     // Ready to issue once the draft says why and what done looks like.
     const draft = d.draft ?? d.statement;
@@ -422,7 +422,7 @@ export class MandateApp extends LitElement {
   private history(d: Detail): TimelineItem[] {
     return [
       ...d.versions.map((v) => ({ at: v.at, who: v.by, what: v.version === 1 ? 'issued it' : `issued version ${v.version}` })),
-      ...d.backBriefs.map((b) => ({ at: b.at, who: b.byName, what: b.outcome === 'accepted' ? `back-briefed: “${b.words}”` : `raised a concern: “${b.concern}”` })),
+      ...d.backBriefs.map((b) => ({ at: b.at, who: b.byName, what: b.outcome === 'accepted' ? `back-briefed: “${plainText(b.words)}”` : `raised a concern: “${plainText(b.concern)}”` })),
       ...d.assessments.map((a) => ({ at: a.at, who: a.byName, what: `rated it ${RATING_WORDS[a.rating].toLowerCase()}${a.note ? `: “${a.note}”` : ''}` })),
     ];
   }
@@ -547,11 +547,10 @@ export class MandateApp extends LitElement {
             action-label="Save" busy-label="Saving…" .submit=${this.submitEdit} @ui-close=${close}>
             <ui-text-field slot="fields" name="title" label="Name" required maxlength="140" .value=${d.intent.title}></ui-text-field>
             ${PARTS.map(
-              (p) => html`<ui-text-field slot="fields" name=${p.key} label=${p.label} hint=${p.hint} ?optional=${!p.required} multiline rows=${p.key === 'mission' ? 2 : 3}
-                maxlength=${p.key === 'mission' ? 500 : 2000} .value=${p.key === 'keyTasks' ? s.keyTasks.join('\n') : s[p.key]}></ui-text-field>`,
+              (p) => html`<ui-editor slot="fields" name=${p.key} label=${p.label} hint=${p.hint} ?optional=${!p.required} rows=${p.key === 'mission' ? 2 : 3}
+                guide=${p.guide ?? ''} .value=${p.key === 'keyTasks' ? s.keyTasks.join('\n') : s[p.key]}></ui-editor>`,
             )}
-            <ui-text-field slot="fields" name="byDate" label="Done by" hint="YYYY-MM-DD" optional maxlength="10" .value=${d.intent.byDate ?? ''}
-              .validate=${(v: string) => (!v.trim() || /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? '' : 'Write it as 2026-11-20.')}></ui-text-field>
+            <ui-date slot="fields" name="byDate" label="Done by" optional empty="No date" .value=${d.intent.byDate ?? ''}></ui-date>
           </ui-dialog>`;
       }
       case 'pass': {
@@ -568,9 +567,8 @@ export class MandateApp extends LitElement {
             <ui-select slot="fields" name="to" label="To" required placeholder="Choose who"
               .options=${this.targets.map((t) => ({ value: t.to, label: t.you ? `${t.name} (you)` : t.name, detail: t.to.startsWith('team:') ? 'Team' : (t.email ?? '') }))}></ui-select>
             <ui-text-field slot="fields" name="title" label="Their part" hint="What they’re to achieve, in a line." required maxlength="140"></ui-text-field>
-            <ui-text-field slot="fields" name="purpose" label="Why it matters to the whole" optional multiline rows="2" maxlength="2000"></ui-text-field>
-            <ui-text-field slot="fields" name="byDate" label="Done by" hint="YYYY-MM-DD" optional maxlength="10"
-              .validate=${(v: string) => (!v.trim() || /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? '' : 'Write it as 2026-11-20.')}></ui-text-field>
+            <ui-editor slot="fields" name="purpose" label="Why it matters to the whole" optional rows="2" guide="2 sentences"></ui-editor>
+            <ui-date slot="fields" name="byDate" label="Done by" optional empty="No date"></ui-date>
             ${carry.length ? html`<ui-checkbox-group slot="fields" name="carry" label="Carry down" hint="What their part starts bound to." optional .options=${carry}></ui-checkbox-group>` : nothing}
           </ui-dialog>`;
       }
@@ -579,15 +577,15 @@ export class MandateApp extends LitElement {
           ? html`<ui-dialog open size="read" eyebrow=${d.recheck ? 'Confirm your back-brief' : 'Back-brief'} heading=${d.intent.title}
               summary=${d.lineOfSight.length ? `Part of ${d.lineOfSight.at(-1)!.title}: ${d.lineOfSight.at(-1)!.purpose || d.lineOfSight.at(-1)!.endState}` : ''}
               action-label=${d.recheck ? 'It still stands' : 'Accept this part'} busy-label="Sending…" .submit=${this.submitAccept} @ui-close=${close}>
-              <ui-text-field slot="fields" name="words" label="Say it back in your own words" hint="What you’ll achieve, and why it matters to the whole." required multiline rows="4" maxlength="4000"></ui-text-field>
+              <ui-editor slot="fields" name="words" label="Say it back in your own words" hint="What you’ll achieve, and why it matters to the whole." required rows="4" guide="3 sentences"></ui-editor>
             </ui-dialog>`
           : nothing;
       case 'concern':
         return d
           ? html`<ui-dialog open size="read" eyebrow="Raise a concern" heading=${d.intent.title} summary="It goes back to whoever passed it down, who can revise it or answer."
               action-label="Send it back" busy-label="Sending…" .submit=${this.submitConcern} @ui-close=${close}>
-              <ui-text-field slot="fields" name="words" label="Say it back in your own words" required multiline rows="3" maxlength="4000"></ui-text-field>
-              <ui-text-field slot="fields" name="concern" label="What doesn’t fit" required multiline rows="3" maxlength="4000"></ui-text-field>
+              <ui-editor slot="fields" name="words" label="Say it back in your own words" required rows="3" guide="3 sentences"></ui-editor>
+              <ui-editor slot="fields" name="concern" label="What doesn’t fit" required rows="3" guide="3 sentences"></ui-editor>
             </ui-dialog>`
           : nothing;
       case 'assess':
@@ -647,8 +645,7 @@ export class MandateApp extends LitElement {
         mandate-app .mandate-side { display: flex; flex-direction: column; gap: var(--space-6); padding: var(--space-5); border-radius: var(--radius-card); background: var(--surface-inset); border: 1px solid var(--hairline); }
         mandate-app .mandate-statement { margin: 0; display: flex; flex-direction: column; gap: var(--space-5); max-width: var(--measure-prose); }
         mandate-app .mandate-statement dt { font-size: var(--type-meta); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-muted); margin-bottom: var(--space-1); }
-        mandate-app .mandate-statement dd { margin: 0; white-space: pre-line; }
-        mandate-app .mandate-statement ul { margin: 0; padding-left: 1.2em; }
+        mandate-app .mandate-statement dd { margin: 0; }
         mandate-app .mandate-judgement { margin: 0; }
         mandate-app .mandate-tree { list-style: none; margin: 0; padding: 0 0 0 var(--space-5); display: flex; flex-direction: column; gap: var(--space-2); border-left: 1px solid var(--hairline); }
         mandate-app .mandate-tree-top { padding-left: 0; border-left: 0; }
