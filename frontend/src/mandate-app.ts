@@ -1,5 +1,5 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
-import { ago, type DialogSubmit, type ListItem, type SelectOption, type StatusName, type TreeItem } from '@augur/ui-kit';
+import { ago, type ButtonKind, type DialogSubmit, type ListItem, type PageAction, type SelectOption, type StatusName, type TreeItem } from '@augur/ui-kit';
 import type { DocumentRef } from '@augur/mfe-sdk';
 import {
   RATING_WORDS,
@@ -192,7 +192,7 @@ export class MandateApp extends LitElement {
       ...(floor?.drafts.length ? [{ id: 'drafts', label: 'Drafts', icon: 'document', meta: String(floor.drafts.length) }] : []),
     ];
     const selected = this.place.view === 'floor' ? 'floor' : '';
-    return html`<nav class="mandate-rail" aria-label="Intent">
+    return html`<div slot="rail" class="mandate-rail">
       <ui-tree label="On this floor" heading=${this.floorName || 'This floor'} .items=${here} selected=${selected} @ui-select=${() => this.go({ view: 'floor' })}></ui-tree>
       ${floor?.can.create ? html`<div class="mandate-rail-act"><ui-button kind="ghost" size="sm" @click=${() => (this.dialog = 'new')}>New intent</ui-button></div>` : nothing}
       <ui-tree
@@ -202,7 +202,7 @@ export class MandateApp extends LitElement {
         selected=${this.place.view === 'yours' ? 'yours' : ''}
         @ui-select=${() => this.go({ view: 'yours' })}
       ></ui-tree>
-    </nav>`;
+    </div>`;
   }
 
   // ---- a floor ----
@@ -228,8 +228,8 @@ export class MandateApp extends LitElement {
     const floor = this.floor;
     if (!floor) return html`<ui-state kind="loading" heading="Loading this floor’s intent"></ui-state>`;
     const empty = !floor.intents.length && !floor.drafts.length;
-    return html`<ui-heading eyebrow=${this.floorName || 'This floor'} heading="Intent" size="l"
-        summary=${floor.intents.length ? `${floor.intents.length} under way here.` : 'Nothing under way here yet.'}></ui-heading>
+    return html`<ui-page-head eyebrow=${this.floorName || 'This floor'} heading="Intent"
+        summary=${floor.intents.length ? `${floor.intents.length} under way here.` : 'Nothing under way here yet.'}></ui-page-head>
       ${empty
         ? html`<ui-state kind="empty" heading=${floor.can.create ? 'Set the first intent for this floor' : 'No intent on this floor yet'}
             body=${floor.can.create
@@ -238,8 +238,12 @@ export class MandateApp extends LitElement {
             action=${floor.can.create ? 'New intent' : ''} @ui-action=${() => (this.dialog = 'new')}></ui-state>`
         : nothing}
       ${floor.intents.length ? html`<div class="mandate-cards">${floor.intents.map((i) => this.card(i, i.counts))}</div>` : nothing}
-      ${floor.drafts.length ? html`<h3 class="mandate-sub">Drafts</h3><div class="mandate-cards">${floor.drafts.map((i) => this.card(i))}</div>` : nothing}
-      ${floor.closed.length ? html`<h3 class="mandate-sub">Closed</h3><div class="mandate-cards">${floor.closed.map((i) => this.card(i))}</div>` : nothing}`;
+      ${floor.drafts.length
+        ? html`<ui-section label="Drafts" count=${floor.drafts.length}><div class="mandate-cards">${floor.drafts.map((i) => this.card(i))}</div></ui-section>`
+        : nothing}
+      ${floor.closed.length
+        ? html`<ui-section label="Closed" count=${floor.closed.length}><div class="mandate-cards">${floor.closed.map((i) => this.card(i))}</div></ui-section>`
+        : nothing}`;
   }
 
   // ---- what you hold ----
@@ -256,8 +260,8 @@ export class MandateApp extends LitElement {
         .filter((i) => !yours.due.some((d) => d.id === i.id) && !yours.recheck.some((d) => d.id === i.id))
         .map((i) => ({ ...row(i, markOf(i).status, [i.partOf ? `Part of ${i.partOf}` : '', i.floorName, markOf(i).label].filter(Boolean).join(' · ')), group: 'You hold' })),
     ];
-    return html`<ui-heading eyebrow="For you" heading="What you hold" size="l"
-        summary=${yours.passed.length ? `${yours.passed.length} waiting for your back-brief.` : 'Your parts, on every floor.'}></ui-heading>
+    return html`<ui-page-head eyebrow="For you" heading="What you hold"
+        summary=${yours.passed.length ? `${yours.passed.length} waiting for your back-brief.` : 'Your parts, on every floor.'}></ui-page-head>
       <ui-list label="What you hold" .noun=${['intent', 'intents']} .items=${items} empty="Nothing passed to you yet. When someone passes you part of their intent, it shows here."
         @ui-open=${(e: CustomEvent<{ item: ListItem }>) => this.go({ view: 'intent', id: e.detail.item.id })}></ui-list>`;
   }
@@ -289,7 +293,7 @@ export class MandateApp extends LitElement {
 
   private statement(s: Statement) {
     const parts = PARTS.filter((p) => (p.key === 'keyTasks' ? s.keyTasks.length : s[p.key]));
-    if (!parts.length) return html`<p class="mandate-quiet">Nothing written yet.</p>`;
+    if (!parts.length) return html`<ui-note>Nothing written yet.</ui-note>`;
     return html`<dl class="mandate-statement">
       ${parts.map(
         (p) => html`<div><dt>${p.label}</dt><dd>${p.key === 'keyTasks' ? html`<ul>${s.keyTasks.map((t) => html`<li>${t}</li>`)}</ul>` : s[p.key]}</dd></div>`,
@@ -316,53 +320,40 @@ export class MandateApp extends LitElement {
     // Ready to issue once the draft says why and what done looks like.
     const draft = d.draft ?? d.statement;
     const written = Boolean(draft.purpose.trim() && draft.endState.trim());
+    const actions = this.actionsFor(d, written);
     return html`
-      ${d.lineOfSight.length
-        ? html`<ol class="mandate-trail" aria-label="The intent above this one">
-            ${d.lineOfSight.map((a) => html`<li><button class="mandate-crumb" @click=${() => this.go({ view: 'intent', id: a.id })}>${a.title}</button><span aria-hidden="true">›</span></li>`)}
-          </ol>`
-        : nothing}
-      <div class="mandate-head">
-        <ui-heading eyebrow=${intent.mainEffort ? 'Main effort' : intent.parent ? 'Part' : 'Intent'} heading=${intent.title} size="l" summary=${meta.join(' · ')}></ui-heading>
-        <ui-status status=${mark.status} label=${mark.label}></ui-status>
-      </div>
+      <ui-page-head
+        .trail=${d.lineOfSight.map((a) => ({ id: a.id, label: a.title }))}
+        eyebrow=${intent.mainEffort ? 'Main effort' : intent.parent ? 'Part' : 'Intent'}
+        heading=${intent.title}
+        summary=${meta.join(' · ')}
+        .actions=${actions}
+        @ui-trail=${(e: CustomEvent<{ step: { id: string } }>) => this.go({ view: 'intent', id: e.detail.step.id })}
+        @ui-action=${(e: CustomEvent<{ action: { id: string } }>) => actions.find((a) => a.id === e.detail.action.id)?.run()}
+      ><ui-status status=${mark.status} label=${mark.label}></ui-status></ui-page-head>
       ${this.attention(d)}
-      <div class="mandate-actions">
-        ${can.backBrief && intent.life === 'passed' ? html`<ui-button kind="primary" @click=${() => (this.dialog = 'accept')}>Back-brief</ui-button>` : nothing}
-        ${can.backBrief && intent.life === 'passed' ? html`<ui-button kind="secondary" @click=${() => (this.dialog = 'concern')}>Raise a concern</ui-button>` : nothing}
-        ${can.backBrief && d.recheck ? html`<ui-button kind="primary" @click=${() => (this.dialog = 'accept')}>Confirm it still stands</ui-button>` : nothing}
-        ${can.edit ? html`<ui-button kind=${intent.life === 'draft' && !written ? 'primary' : 'secondary'} @click=${() => (this.dialog = 'edit')}>${intent.life === 'draft' ? 'Write it' : 'Revise'}</ui-button>` : nothing}
-        ${can.edit && this.unissued(d) ? html`<ui-button kind=${written ? 'primary' : 'secondary'} @click=${() => this.act(() => this.api.issue(intent.id), 'Issued.')}>Issue</ui-button>` : nothing}
-        ${can.assess ? html`<ui-button kind=${d.assessmentDue ? 'primary' : 'secondary'} @click=${() => (this.dialog = 'assess')}>How is it going?</ui-button>` : nothing}
-        ${can.pass ? html`<ui-button kind="secondary" @click=${() => this.openPass()}>Pass down</ui-button>` : nothing}
-        ${can.achieve ? html`<ui-button kind="secondary" @click=${() => (this.dialog = 'achieve')}>Close as achieved</ui-button>` : nothing}
-        ${can.withdraw ? html`<ui-button kind="ghost" @click=${() => (this.dialog = 'withdraw')}>Withdraw</ui-button>` : nothing}
-      </div>
-      <p class="mandate-note" role="status">${this.note}</p>
-      <div class="mandate-columns">
-        <div class="mandate-col">
-          ${this.statement(d.statement)}
-          ${latest
-            ? html`<section class="mandate-pane"><h3 class="mandate-label">Latest judgement · ${latest.byName} · ${ago(latest.at)}</h3>
-                <p><b>${RATING_WORDS[latest.rating]}.</b> ${latest.note}</p></section>`
-            : nothing}
-          <section>
-            <h3 class="mandate-label">Passed down</h3>
-            ${d.below.length ? html`<ul class="mandate-tree mandate-tree-top">${d.below.map((b) => this.branch(b))}</ul>` : html`<p class="mandate-quiet">${can.pass ? 'Nothing passed down yet. Pass parts of it to the teams below, or to people on this floor.' : 'Nothing passed down.'}</p>`}
-          </section>
-        </div>
-        <aside class="mandate-side">
+      <ui-note live>${this.note}</ui-note>
+      ${this.statement(d.statement)}
+      ${latest
+        ? html`<ui-section label=${`Latest judgement · ${latest.byName} · ${ago(latest.at)}`} count="-1">
+            <p class="mandate-judgement"><b>${RATING_WORDS[latest.rating]}.</b> ${latest.note}</p>
+          </ui-section>`
+        : nothing}
+      <ui-section label="Passed down" count=${d.below.length} limit="0">
+        ${d.below.length
+          ? html`<ul class="mandate-tree mandate-tree-top">${d.below.map((b) => this.branch(b))}</ul>`
+          : html`<ui-note>${can.pass ? 'Nothing passed down yet. Pass parts of it to the teams below, or to people on this floor.' : 'Nothing passed down.'}</ui-note>`}
+      </ui-section>
+      <div slot="aside" class="mandate-side">
           ${d.lineOfSight.length
-            ? html`<section>
-                <h3 class="mandate-label">Line of sight</h3>
+            ? html`<ui-section label="Line of sight" count="-1">
                 <ol class="mandate-sight">
                   ${d.lineOfSight.map((a) => html`<li style=${`--floor:${FLOOR_COLOUR[a.floorKind]}`}><b>${a.title}</b><span>${a.purpose || a.mission}</span></li>`)}
                   <li style=${`--floor:${FLOOR_COLOUR[intent.floorKind]}`}><b>This</b></li>
                 </ol>
-              </section>`
+              </ui-section>`
             : nothing}
-          <section>
-            <h3 class="mandate-label">Bound to</h3>
+          <ui-section label="Bound to" count=${d.entities.length} limit="0">
             ${byRole.length
               ? byRole.map(
                   (g) => html`<div class="mandate-role"><span class="mandate-quiet">${ROLE_WORDS[g.role] ?? g.role}</span><span class="mandate-chips">${g.items.map(
@@ -374,13 +365,12 @@ export class MandateApp extends LitElement {
                     </span>`,
                   )}</span></div>`,
                 )
-              : html`<p class="mandate-quiet">No entities yet: the ships, places and resources it’s about.</p>`}
+              : html`<ui-note>No entities yet: the ships, places and resources it’s about.</ui-note>`}
             ${can.bind
-              ? html`<ui-button kind="ghost" size="sm" ?disabled=${Boolean(this.noEntities)} reason=${this.noEntities} @click=${() => void this.bindEntity()}>Bind an entity</ui-button>`
+              ? html`<div><ui-button kind="ghost" size="sm" ?disabled=${Boolean(this.noEntities)} reason=${this.noEntities} @click=${() => void this.bindEntity()}>Bind an entity</ui-button></div>`
               : nothing}
-          </section>
-          <section>
-            <h3 class="mandate-label">Context documents</h3>
+          </ui-section>
+          <ui-section label="Context documents" count=${d.documents.length} limit="0">
             ${d.documents.length
               ? html`<ul class="mandate-docs">${d.documents.map(
                   (doc) => html`<li>
@@ -389,15 +379,33 @@ export class MandateApp extends LitElement {
                     ${can.bind && !doc.from ? html`<ui-button kind="ghost" size="sm" @click=${() => this.act(() => this.api.removeDocument(intent.id, doc.document))}>Remove</ui-button>` : nothing}
                   </li>`,
                 )}</ul>`
-              : html`<p class="mandate-quiet">No documents yet.</p>`}
-            ${can.bind && this.pickDocument ? html`<ui-button kind="ghost" size="sm" @click=${() => void this.addDocument()}>Add a document</ui-button>` : nothing}
-          </section>
-          <section>
-            <h3 class="mandate-label">History</h3>
+              : html`<ui-note>No documents yet.</ui-note>`}
+            ${can.bind && this.pickDocument ? html`<div><ui-button kind="ghost" size="sm" @click=${() => void this.addDocument()}>Add a document</ui-button></div>` : nothing}
+          </ui-section>
+          <ui-section label="History" count="-1" limit="0">
             <ul class="mandate-history">${this.history(d)}</ul>
-          </section>
-        </aside>
+          </ui-section>
       </div>`;
+  }
+
+  /** What the person can do with it now, most pressing first: the page head shows two and puts the rest in ⋯. */
+  private actionsFor(d: Detail, written: boolean) {
+    const { intent, can } = d;
+    const acts: (PageAction & { run: () => void })[] = [];
+    const add = (id: string, label: string, kind: ButtonKind, run: () => void) => acts.push({ id, label, kind, run });
+    if (can.backBrief && intent.life === 'passed') {
+      add('back-brief', 'Back-brief', 'primary', () => (this.dialog = 'accept'));
+      add('concern', 'Raise a concern', 'secondary', () => (this.dialog = 'concern'));
+    }
+    if (can.backBrief && d.recheck) add('confirm', 'Confirm it still stands', 'primary', () => (this.dialog = 'accept'));
+    if (can.edit) add('edit', intent.life === 'draft' ? 'Write it' : 'Revise', intent.life === 'draft' && !written ? 'primary' : 'secondary', () => (this.dialog = 'edit'));
+    if (can.edit && this.unissued(d)) add('issue', 'Issue', written ? 'primary' : 'secondary', () => void this.act(() => this.api.issue(intent.id), 'Issued.'));
+    if (can.assess) add('assess', 'How is it going?', d.assessmentDue ? 'primary' : 'secondary', () => (this.dialog = 'assess'));
+    if (can.pass) add('pass', 'Pass down', 'secondary', () => this.openPass());
+    if (can.achieve) add('achieve', 'Close as achieved', 'secondary', () => (this.dialog = 'achieve'));
+    if (can.withdraw) add('withdraw', 'Withdraw', 'ghost', () => (this.dialog = 'withdraw'));
+    // The primary leads, so it's never folded into ⋯.
+    return [...acts.filter((a) => a.kind === 'primary'), ...acts.filter((a) => a.kind !== 'primary')];
   }
 
   /** The draft differs from what was last issued, or nothing has been yet. */
@@ -417,7 +425,8 @@ export class MandateApp extends LitElement {
     else if (can.edit && this.unissued(d)) words = 'You’ve changed it since it was last issued. Issue it to make it the next version.';
     else if (d.assessmentDue) words = 'How is it going? Your last judgement is older than its rhythm.';
     else if (d.ended) words = `${markOf(intent).label} ${ago(d.ended.at)}.${d.ended.reason ? ` ${d.ended.reason}` : ''}`;
-    return words ? html`<p class="mandate-attention">${words}</p>` : nothing;
+    const needs = (can.backBrief && (intent.life === 'passed' || d.recheck)) || d.assessmentDue;
+    return words ? html`<ui-notice tone=${needs ? 'needs' : 'info'}>${words}</ui-notice>` : nothing;
   }
 
   private history(d: Detail) {
@@ -641,14 +650,9 @@ export class MandateApp extends LitElement {
 
   override render() {
     return html`<style>
-        /* Mandate's own ground: the shell's water stays outside the app. */
-        mandate-app { display: grid; grid-template-columns: minmax(200px, 260px) 1fr; min-height: 100%; background: var(--slate); }
-        mandate-app .mandate-rail { display: flex; flex-direction: column; gap: var(--space-5); padding: var(--space-6) var(--space-3); border-right: 1px solid var(--hairline); }
+        mandate-app { display: block; min-height: 100%; }
+        mandate-app .mandate-rail { display: flex; flex-direction: column; gap: var(--space-5); }
         mandate-app .mandate-rail-act { padding: 0 var(--space-2); }
-        mandate-app .mandate-main { min-width: 0; padding: var(--space-6) var(--edge); }
-        mandate-app .mandate-main-inner { max-width: var(--measure-wide); display: flex; flex-direction: column; gap: var(--space-5); }
-        mandate-app .mandate-main-inner[aria-busy='true'] { opacity: 0.7; }
-        mandate-app .mandate-sub, mandate-app .mandate-label { margin: 0; font-size: var(--type-meta); font-weight: 400; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-muted); }
         mandate-app .mandate-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-4); }
         mandate-app .mandate-card { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4) var(--space-5);
           border: 1px solid var(--hairline); border-left: 3px solid var(--floor); border-radius: var(--radius-card); background: var(--surface-pane); }
@@ -660,25 +664,14 @@ export class MandateApp extends LitElement {
         mandate-app .mandate-card-note { font-size: var(--type-small); color: var(--ink); }
         mandate-app .at-risk { color: var(--warning); font-weight: 600; }
         mandate-app .blocked { color: var(--danger); font-weight: 600; }
-        mandate-app .mandate-trail { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; font-size: var(--type-small); color: var(--ink-muted); }
-        mandate-app .mandate-trail li { display: flex; gap: var(--space-2); }
         mandate-app .mandate-crumb { all: unset; cursor: pointer; color: var(--ink); border-radius: var(--radius-key); }
         mandate-app .mandate-crumb:hover { text-decoration: underline; }
-        mandate-app .mandate-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
-        mandate-app .mandate-attention { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-inset); background: var(--surface-raised); border: 1px solid var(--hairline-strong); }
-        mandate-app .mandate-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-        mandate-app .mandate-note { margin: 0; min-height: 1.5em; font-size: var(--type-small); color: var(--ink-muted); }
-        mandate-app .mandate-columns { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(240px, 1fr); gap: var(--space-7); align-items: start; }
-        @media (max-width: 960px) { mandate-app .mandate-columns { grid-template-columns: minmax(0, 1fr); } }
-        mandate-app .mandate-col, mandate-app .mandate-side { display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; }
-        mandate-app .mandate-side { padding: var(--space-5); border-radius: var(--radius-card); background: var(--surface-inset); border: 1px solid var(--hairline); }
-        mandate-app .mandate-side section, mandate-app .mandate-col section { display: flex; flex-direction: column; gap: var(--space-3); }
+        mandate-app .mandate-side { display: flex; flex-direction: column; gap: var(--space-6); padding: var(--space-5); border-radius: var(--radius-card); background: var(--surface-inset); border: 1px solid var(--hairline); }
         mandate-app .mandate-statement { margin: 0; display: flex; flex-direction: column; gap: var(--space-5); max-width: var(--measure-prose); }
         mandate-app .mandate-statement dt { font-size: var(--type-meta); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-muted); margin-bottom: var(--space-1); }
         mandate-app .mandate-statement dd { margin: 0; white-space: pre-line; }
         mandate-app .mandate-statement ul { margin: 0; padding-left: 1.2em; }
-        mandate-app .mandate-pane { padding: var(--space-4); border-radius: var(--radius-inset); background: var(--surface-raised); }
-        mandate-app .mandate-pane p { margin: 0; }
+        mandate-app .mandate-judgement { margin: 0; }
         mandate-app .mandate-tree { list-style: none; margin: 0; padding: 0 0 0 var(--space-5); display: flex; flex-direction: column; gap: var(--space-2); border-left: 1px solid var(--hairline); }
         mandate-app .mandate-tree-top { padding-left: 0; border-left: 0; }
         mandate-app .mandate-branch { display: flex; flex-direction: column; gap: var(--space-2); }
@@ -698,8 +691,10 @@ export class MandateApp extends LitElement {
         mandate-app .mandate-docs, mandate-app .mandate-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--type-small); }
         mandate-app .mandate-docs li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
       </style>
-      ${this.rail()}
-      <main class="mandate-main"><div class="mandate-main-inner" aria-busy=${this.loading ? 'true' : 'false'}>${this.main()}</div></main>
+      <ui-app-frame rail-label="Intent" ?busy=${this.loading}>
+        ${this.rail()}
+        ${this.main()}
+      </ui-app-frame>
       ${this.dialogs()}`;
   }
 }
