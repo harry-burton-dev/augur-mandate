@@ -94,7 +94,9 @@ describe('mandate', () => {
     await app.mount(el, ctx({ path: '/intents/a1', raise }));
     const view = el.querySelector('mandate-app')!;
     await settle(view);
-    for (const words of ['So the coast is watched', 'No overtime', 'Refit Hull 4', 'Two hulls in dock']) expect(view.textContent).toContain(words);
+    const statement = [...view.querySelectorAll('ui-prose')].map((p) => p.value);
+    for (const words of ['So the coast is watched', 'No overtime', '- Refit Hull 4']) expect(statement).toContain(words);
+    for (const words of ['Refit Hull 4', 'Two hulls in dock']) expect(view.textContent).toContain(words);
     expect(view.querySelector('ui-refs')!.refs[0]!.label).toBe('HMS Example');
     const chip = view.querySelector('ui-refs')!.shadowRoot!.querySelector('ui-ref')!;
     (chip.shadowRoot!.querySelector('button.open') as HTMLButtonElement).click();
