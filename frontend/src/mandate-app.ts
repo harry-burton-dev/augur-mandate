@@ -356,14 +356,10 @@ export class MandateApp extends LitElement {
           <ui-section label="Bound to" count=${d.entities.length} limit="0">
             ${byRole.length
               ? byRole.map(
-                  (g) => html`<div class="mandate-role"><span class="mandate-quiet">${ROLE_WORDS[g.role] ?? g.role}</span><span class="mandate-chips">${g.items.map(
-                    (e) => html`<span class="mandate-chip">
-                      <button class="mandate-crumb" title=${e.from ? `From ${e.from}` : `Open in Data Atlas`} @click=${() => this.openEntity?.(e.entity)}>${e.entity.label || 'An entity'}</button>
-                      ${can.bind && !e.from
-                        ? html`<button class="mandate-crumb mandate-unbind" aria-label=${`Unbind ${e.entity.label || 'this entity'}`} @click=${() => this.act(() => this.api.unbindEntity(intent.id, e.entity.id, e.role))}>×</button>`
-                        : nothing}
-                    </span>`,
-                  )}</span></div>`,
+                  (g) => html`<div class="mandate-role"><span class="mandate-quiet">${ROLE_WORDS[g.role] ?? g.role}</span>
+                    <ui-refs ?removable=${can.bind} .refs=${g.items.map((e) => ({ ...e.entity, ...(e.from ? { from: e.from } : {}) }))}
+                      @ui-open=${(ev: CustomEvent<{ ref: EntityRef }>) => this.openEntity?.(g.items.find((e) => e.entity.id === ev.detail.ref.id)!.entity)}
+                      @ui-remove=${(ev: CustomEvent<{ ref: EntityRef }>) => this.act(() => this.api.unbindEntity(intent.id, ev.detail.ref.id, g.role))}></ui-refs></div>`,
                 )
               : html`<ui-note>No entities yet: the ships, places and resources it’s about.</ui-note>`}
             ${can.bind
@@ -371,15 +367,9 @@ export class MandateApp extends LitElement {
               : nothing}
           </ui-section>
           <ui-section label="Context documents" count=${d.documents.length} limit="0">
-            ${d.documents.length
-              ? html`<ul class="mandate-docs">${d.documents.map(
-                  (doc) => html`<li>
-                    <button class="mandate-crumb" @click=${() => this.openDocument?.(doc.document)}>${doc.document.title}</button>
-                    <span class="mandate-quiet">${doc.from ? `from ${doc.from}` : ''}</span>
-                    ${can.bind && !doc.from ? html`<ui-button kind="ghost" size="sm" @click=${() => this.act(() => this.api.removeDocument(intent.id, doc.document))}>Remove</ui-button>` : nothing}
-                  </li>`,
-                )}</ul>`
-              : html`<ui-note>No documents yet.</ui-note>`}
+            <ui-refs ?removable=${can.bind} empty="No documents yet." .refs=${d.documents.map((doc) => ({ ...doc.document, kind: 'document' as const, ...(doc.from ? { from: doc.from } : {}) }))}
+              @ui-open=${(ev: CustomEvent<{ ref: { id: string } }>) => this.openDocument?.(d.documents.find((doc) => doc.document.id === ev.detail.ref.id)!.document)}
+              @ui-remove=${(ev: CustomEvent<{ ref: { id: string } }>) => this.act(() => this.api.removeDocument(intent.id, d.documents.find((doc) => doc.document.id === ev.detail.ref.id)!.document))}></ui-refs>
             ${can.bind && this.pickDocument ? html`<div><ui-button kind="ghost" size="sm" @click=${() => void this.addDocument()}>Add a document</ui-button></div>` : nothing}
           </ui-section>
           <ui-section label="History" count="-1" limit="0">
@@ -652,10 +642,8 @@ export class MandateApp extends LitElement {
         mandate-app { display: block; min-height: 100%; }
         mandate-app .mandate-rail { display: flex; flex-direction: column; gap: var(--space-5); }
         mandate-app .mandate-rail-act { padding: 0 var(--space-2); }
-        mandate-app .mandate-crumb:focus-visible, mandate-app .mandate-branch-open:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
+        mandate-app .mandate-branch-open:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
         mandate-app .mandate-card-meta, mandate-app .mandate-quiet { font-size: var(--type-small); color: var(--ink-muted); margin: 0; }
-        mandate-app .mandate-crumb { all: unset; cursor: pointer; color: var(--ink); border-radius: var(--radius-key); }
-        mandate-app .mandate-crumb:hover { text-decoration: underline; }
         mandate-app .mandate-side { display: flex; flex-direction: column; gap: var(--space-6); padding: var(--space-5); border-radius: var(--radius-card); background: var(--surface-inset); border: 1px solid var(--hairline); }
         mandate-app .mandate-statement { margin: 0; display: flex; flex-direction: column; gap: var(--space-5); max-width: var(--measure-prose); }
         mandate-app .mandate-statement dt { font-size: var(--type-meta); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-muted); margin-bottom: var(--space-1); }
@@ -673,11 +661,6 @@ export class MandateApp extends LitElement {
         mandate-app .mandate-branch-title::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--floor); margin-right: var(--space-2); vertical-align: 0.1em; }
         mandate-app .mandate-badge { font-size: var(--type-meta); letter-spacing: 0.1em; text-transform: uppercase; color: var(--floor-team-high); margin-right: var(--space-2); }
         mandate-app .mandate-role { display: flex; flex-direction: column; gap: var(--space-2); }
-        mandate-app .mandate-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-        mandate-app .mandate-chip { display: inline-flex; gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-3); border: 1px solid var(--hairline); border-radius: var(--radius-key); font-size: var(--type-small); }
-        mandate-app .mandate-unbind { color: var(--ink-muted); }
-        mandate-app .mandate-docs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--type-small); }
-        mandate-app .mandate-docs li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
       </style>
       <ui-app-frame rail-label="Intent" ?busy=${this.loading}>
         ${this.rail()}

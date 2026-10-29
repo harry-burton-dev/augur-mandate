@@ -94,8 +94,10 @@ describe('mandate', () => {
     await app.mount(el, ctx({ path: '/intents/a1', raise }));
     const view = el.querySelector('mandate-app')!;
     await settle(view);
-    for (const words of ['So the coast is watched', 'No overtime', 'Refit Hull 4', 'Two hulls in dock', 'HMS Example']) expect(view.textContent).toContain(words);
-    [...view.querySelectorAll('button')].find((b) => b.textContent?.includes('HMS Example'))!.click();
+    for (const words of ['So the coast is watched', 'No overtime', 'Refit Hull 4', 'Two hulls in dock']) expect(view.textContent).toContain(words);
+    expect(view.querySelector('ui-refs')!.refs[0]!.label).toBe('HMS Example');
+    const chip = view.querySelector('ui-refs')!.shadowRoot!.querySelector('ui-ref')!;
+    (chip.shadowRoot!.querySelector('button.open') as HTMLButtonElement).click();
     expect(raise).toHaveBeenCalledWith({ type: 'entity.open', payload: { kind: 'entity', id: 'ent_01J0000000000000000000SHIP', type: 'ship', label: 'HMS Example' } });
   });
 
