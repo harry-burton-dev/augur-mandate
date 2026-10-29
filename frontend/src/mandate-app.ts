@@ -376,8 +376,7 @@ export class MandateApp extends LitElement {
                 )
               : html`<p class="mandate-quiet">No entities yet: the ships, places and resources it’s about.</p>`}
             ${can.bind
-              ? html`<ui-button kind="ghost" size="sm" ?disabled=${Boolean(this.noEntities)} @click=${() => void this.bindEntity()}>Bind an entity</ui-button>
-                  ${this.noEntities ? html`<p class="mandate-quiet">${this.noEntities}</p>` : nothing}`
+              ? html`<ui-button kind="ghost" size="sm" ?disabled=${Boolean(this.noEntities)} reason=${this.noEntities} @click=${() => void this.bindEntity()}>Bind an entity</ui-button>`
               : nothing}
           </section>
           <section>

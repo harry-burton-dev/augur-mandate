@@ -112,7 +112,7 @@ describe('mandate', () => {
     await settle(view);
     expect(request).toHaveBeenCalledWith({ type: 'entity.pick', payload: { purpose: 'Bind to this intent' } });
     expect(bind.disabled).toBe(true);
-    expect(view.textContent).toContain('Linking to entities arrives with Data Atlas.');
+    expect(bind.getAttribute('reason')).toContain('Linking to entities arrives with Data Atlas.');
   });
 
   it('answers aim.pick with the intent chosen', async () => {
