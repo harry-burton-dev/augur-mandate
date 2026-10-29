@@ -1,5 +1,5 @@
 import { LitElement, html, nothing, type TemplateResult } from 'lit';
-import { ago, type ButtonKind, type DialogSubmit, type ListItem, type PageAction, type SelectOption, type StatusName, type TreeItem } from '@augur/ui-kit';
+import { ago, type ButtonKind, type DialogSubmit, type ListItem, type PageAction, type PathStep, type SelectOption, type StatusName, type TimelineItem, type TreeItem } from '@augur/ui-kit';
 import type { DocumentRef } from '@augur/mfe-sdk';
 import {
   RATING_WORDS,
@@ -209,19 +209,19 @@ export class MandateApp extends LitElement {
 
   private card(i: FloorItem | Summary, counts?: FloorItem['counts']) {
     const mark = markOf(i);
-    return html`<button class="mandate-card" style=${`--floor:${FLOOR_COLOUR[i.floorKind]}`} @click=${() => this.go({ view: 'intent', id: i.id })}>
-      <span class="mandate-card-top">
-        <span class="mandate-card-title">${i.title}</span>
-        <ui-status status=${mark.status} label=${mark.label}></ui-status>
-      </span>
-      <span class="mandate-card-meta">${[i.partOf ? `Part of ${i.partOf}` : '', holderWords(i), i.byDate ? `By ${i.byDate}` : ''].filter(Boolean).join(' · ')}</span>
+    const rest = counts ? counts.parts - counts.atRisk - counts.blocked : 0;
+    return html`<ui-card heading=${i.title} status=${mark.status} status-label=${mark.label} floor-kind=${i.floorKind} floor-name=${i.floorName}
+      .meta=${[i.partOf ? `Part of ${i.partOf}` : '', holderWords(i), i.byDate ? `By ${i.byDate}` : ''].filter(Boolean)}
+      note=${i.ratingNote ?? ''} note-tone=${i.rating === 'blocked' ? 'danger' : i.rating === 'at_risk' ? 'warning' : 'ink'}
+      @ui-open=${() => this.go({ view: 'intent', id: i.id })}>
       ${counts?.parts
-        ? html`<span class="mandate-card-meta">${counts.parts} ${counts.parts === 1 ? 'part' : 'parts'} below${counts.atRisk ? html` · <b class="at-risk">${counts.atRisk} at risk</b>` : nothing}${counts.blocked
-            ? html` · <b class="blocked">${counts.blocked} blocked</b>`
-            : nothing}</span>`
+        ? html`<ui-tally slot="tally" .noun=${['part below', 'parts below']} .counts=${[
+            { status: 'running', n: rest, word: 'under way' },
+            { status: 'warning', n: counts.atRisk, word: 'at risk', loud: true },
+            { status: 'failed', n: counts.blocked, word: 'blocked', loud: true },
+          ]}></ui-tally>`
         : nothing}
-      ${i.ratingNote ? html`<span class="mandate-card-note">${i.ratingNote}</span>` : nothing}
-    </button>`;
+    </ui-card>`;
   }
 
   private floorView() {
@@ -237,12 +237,12 @@ export class MandateApp extends LitElement {
               : 'When this floor’s leads set intent, or pass part of theirs down to you, it shows here.'}
             action=${floor.can.create ? 'New intent' : ''} @ui-action=${() => (this.dialog = 'new')}></ui-state>`
         : nothing}
-      ${floor.intents.length ? html`<div class="mandate-cards">${floor.intents.map((i) => this.card(i, i.counts))}</div>` : nothing}
+      ${floor.intents.length ? html`<ui-cards>${floor.intents.map((i) => this.card(i, i.counts))}</ui-cards>` : nothing}
       ${floor.drafts.length
-        ? html`<ui-section label="Drafts" count=${floor.drafts.length}><div class="mandate-cards">${floor.drafts.map((i) => this.card(i))}</div></ui-section>`
+        ? html`<ui-section label="Drafts" count=${floor.drafts.length}><ui-cards>${floor.drafts.map((i) => this.card(i))}</ui-cards></ui-section>`
         : nothing}
       ${floor.closed.length
-        ? html`<ui-section label="Closed" count=${floor.closed.length}><div class="mandate-cards">${floor.closed.map((i) => this.card(i))}</div></ui-section>`
+        ? html`<ui-section label="Closed" count=${floor.closed.length}><ui-cards>${floor.closed.map((i) => this.card(i))}</ui-cards></ui-section>`
         : nothing}`;
   }
 
@@ -346,11 +346,11 @@ export class MandateApp extends LitElement {
       </ui-section>
       <div slot="aside" class="mandate-side">
           ${d.lineOfSight.length
-            ? html`<ui-section label="Line of sight" count="-1">
-                <ol class="mandate-sight">
-                  ${d.lineOfSight.map((a) => html`<li style=${`--floor:${FLOOR_COLOUR[a.floorKind]}`}><b>${a.title}</b><span>${a.purpose || a.mission}</span></li>`)}
-                  <li style=${`--floor:${FLOOR_COLOUR[intent.floorKind]}`}><b>This</b></li>
-                </ol>
+            ? html`<ui-section label="Line of sight" count="-1" limit="0">
+                <ui-path .steps=${[
+                  ...d.lineOfSight.map((a) => ({ id: a.id, floor: a.floorKind, title: a.title, line: a.purpose || a.mission, ...(a.mainEffort ? { mark: 'Main effort' } : {}) })),
+                  { floor: intent.floorKind, title: 'This', here: true },
+                ] satisfies PathStep[]} @ui-open=${(e: CustomEvent<{ step: PathStep }>) => this.go({ view: 'intent', id: e.detail.step.id! })}></ui-path>
               </ui-section>`
             : nothing}
           <ui-section label="Bound to" count=${d.entities.length} limit="0">
@@ -383,7 +383,7 @@ export class MandateApp extends LitElement {
             ${can.bind && this.pickDocument ? html`<div><ui-button kind="ghost" size="sm" @click=${() => void this.addDocument()}>Add a document</ui-button></div>` : nothing}
           </ui-section>
           <ui-section label="History" count="-1" limit="0">
-            <ul class="mandate-history">${this.history(d)}</ul>
+            <ui-timeline .items=${this.history(d)}></ui-timeline>
           </ui-section>
       </div>`;
   }
@@ -429,13 +429,12 @@ export class MandateApp extends LitElement {
     return words ? html`<ui-notice tone=${needs ? 'needs' : 'info'}>${words}</ui-notice>` : nothing;
   }
 
-  private history(d: Detail) {
-    const lines = [
-      ...d.versions.map((v) => ({ at: v.at, words: `Version ${v.version} issued by ${v.by}` })),
-      ...d.backBriefs.map((b) => ({ at: b.at, words: b.outcome === 'accepted' ? `${b.byName} back-briefed: “${b.words}”` : `${b.byName} raised a concern: “${b.concern}”` })),
-      ...d.assessments.map((a) => ({ at: a.at, words: `${a.byName}: ${RATING_WORDS[a.rating]}${a.note ? `, “${a.note}”` : ''}` })),
-    ].sort((a, b) => b.at.localeCompare(a.at));
-    return lines.slice(0, 12).map((l) => html`<li><span class="mandate-quiet">${ago(l.at)}</span> ${l.words}</li>`);
+  private history(d: Detail): TimelineItem[] {
+    return [
+      ...d.versions.map((v) => ({ at: v.at, who: v.by, what: v.version === 1 ? 'issued it' : `issued version ${v.version}` })),
+      ...d.backBriefs.map((b) => ({ at: b.at, who: b.byName, what: b.outcome === 'accepted' ? `back-briefed: “${b.words}”` : `raised a concern: “${b.concern}”` })),
+      ...d.assessments.map((a) => ({ at: a.at, who: a.byName, what: `rated it ${RATING_WORDS[a.rating].toLowerCase()}${a.note ? `: “${a.note}”` : ''}` })),
+    ];
   }
 
   // ---- binding ----
@@ -653,17 +652,8 @@ export class MandateApp extends LitElement {
         mandate-app { display: block; min-height: 100%; }
         mandate-app .mandate-rail { display: flex; flex-direction: column; gap: var(--space-5); }
         mandate-app .mandate-rail-act { padding: 0 var(--space-2); }
-        mandate-app .mandate-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-4); }
-        mandate-app .mandate-card { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4) var(--space-5);
-          border: 1px solid var(--hairline); border-left: 3px solid var(--floor); border-radius: var(--radius-card); background: var(--surface-pane); }
-        mandate-app .mandate-card:hover { border-color: var(--hairline-strong); border-left-color: var(--floor); }
-        mandate-app .mandate-card:focus-visible, mandate-app .mandate-crumb:focus-visible, mandate-app .mandate-branch-open:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
-        mandate-app .mandate-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
-        mandate-app .mandate-card-title { font-size: var(--type-lead); color: var(--ink); }
+        mandate-app .mandate-crumb:focus-visible, mandate-app .mandate-branch-open:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
         mandate-app .mandate-card-meta, mandate-app .mandate-quiet { font-size: var(--type-small); color: var(--ink-muted); margin: 0; }
-        mandate-app .mandate-card-note { font-size: var(--type-small); color: var(--ink); }
-        mandate-app .at-risk { color: var(--warning); font-weight: 600; }
-        mandate-app .blocked { color: var(--danger); font-weight: 600; }
         mandate-app .mandate-crumb { all: unset; cursor: pointer; color: var(--ink); border-radius: var(--radius-key); }
         mandate-app .mandate-crumb:hover { text-decoration: underline; }
         mandate-app .mandate-side { display: flex; flex-direction: column; gap: var(--space-6); padding: var(--space-5); border-radius: var(--radius-card); background: var(--surface-inset); border: 1px solid var(--hairline); }
@@ -676,19 +666,17 @@ export class MandateApp extends LitElement {
         mandate-app .mandate-tree-top { padding-left: 0; border-left: 0; }
         mandate-app .mandate-branch { display: flex; flex-direction: column; gap: var(--space-2); }
         mandate-app .mandate-branch-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-inset);
-          background: var(--surface-pane); border: 1px solid var(--hairline); border-left: 3px solid var(--floor); }
+          background: var(--surface-pane); border: 1px solid var(--hairline); }
         mandate-app .mandate-branch-open { all: unset; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
         mandate-app button.mandate-branch-open { cursor: pointer; }
         mandate-app .mandate-branch-title { color: var(--ink); }
+        mandate-app .mandate-branch-title::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--floor); margin-right: var(--space-2); vertical-align: 0.1em; }
         mandate-app .mandate-badge { font-size: var(--type-meta); letter-spacing: 0.1em; text-transform: uppercase; color: var(--floor-team-high); margin-right: var(--space-2); }
-        mandate-app .mandate-sight { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
-        mandate-app .mandate-sight li { display: flex; flex-direction: column; gap: var(--space-1); padding-left: var(--space-3); border-left: 3px solid var(--floor); font-size: var(--type-small); }
-        mandate-app .mandate-sight span { color: var(--ink-muted); }
         mandate-app .mandate-role { display: flex; flex-direction: column; gap: var(--space-2); }
         mandate-app .mandate-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
         mandate-app .mandate-chip { display: inline-flex; gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-3); border: 1px solid var(--hairline); border-radius: var(--radius-key); font-size: var(--type-small); }
         mandate-app .mandate-unbind { color: var(--ink-muted); }
-        mandate-app .mandate-docs, mandate-app .mandate-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--type-small); }
+        mandate-app .mandate-docs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--type-small); }
         mandate-app .mandate-docs li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
       </style>
       <ui-app-frame rail-label="Intent" ?busy=${this.loading}>
