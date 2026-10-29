@@ -3,7 +3,7 @@
   "name": "Mandate",
   "route": "/mandate",
   "entry": "/apps/mandate/entry.js",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sdk": "^1.4.0",
   "description": "Intent, passed down the floors: what we mean to achieve, and who holds each part",
   "icon": "compass",
