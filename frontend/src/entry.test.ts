@@ -56,6 +56,7 @@ const ctx = (over: Partial<MountContext> = {}): MountContext => ({
   path: '/',
   workspace: floor,
   getWorkspace: () => floor,
+  previewOn: () => false,
   fetch: service as unknown as MountContext['fetch'],
   ...over,
 });
