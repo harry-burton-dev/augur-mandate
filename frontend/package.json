@@ -1,6 +1,6 @@
 {
   "name": "@apps/mandate-frontend",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "Mandate's micro frontend. Built as one ES module the shell imports from the registry's entry URL.",
