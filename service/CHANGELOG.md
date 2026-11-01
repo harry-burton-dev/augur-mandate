@@ -1,5 +1,12 @@
 # @apps/mandate
 
+## 0.1.1
+
+### Patch Changes
+
+- Updated dependencies [ea41136]
+  - @augur/service-kit@0.10.0
+
 ## 0.1.0
 
 ### Minor Changes

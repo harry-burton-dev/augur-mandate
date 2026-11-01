@@ -1,5 +1,15 @@
 # @apps/mandate-frontend
 
+## 0.1.5
+
+### Patch Changes
+
+- Updated dependencies [2a05a51]
+- Updated dependencies [4c1bb55]
+- Updated dependencies [5ab5009]
+  - @augur/ui-kit@1.8.0
+  - @augur/mfe-sdk@1.9.0
+
 ## 0.1.4
 
 ### Patch Changes
