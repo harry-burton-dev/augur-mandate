@@ -543,6 +543,7 @@ export class PgMandateStore implements MandateStore {
     return rows.map((r): Assessment => ({ id: r.id, intent: r.intent_id, by: r.by_person, byName: r.by_name, rating: r.rating, note: r.note, at: r.at.toISOString() }));
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a pg row, typed by the query that read it
   private static entityRow = (r: Record<string, any>): EntityBinding => ({
     intent: r.intent_id,
     entity: { kind: 'entity', id: r.entity_id, type: r.entity_type, label: r.label_cache },

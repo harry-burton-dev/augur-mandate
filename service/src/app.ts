@@ -635,7 +635,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       );
 
       /** Ends an intent, and every open part below it: achieved, or withdrawn. */
-      const close = async (v: Viewer, loaded: Loaded, life: 'achieved' | 'withdrawn', reason: string, reply: FastifyReply) => {
+      const close = async (v: Viewer, loaded: Loaded, life: 'achieved' | 'withdrawn', reason: string, _reply: FastifyReply) => {
         const { intent, tree } = loaded;
         const at = stamp();
         const below = tree.filter((d) => d.ancestors.includes(intent.id) && !ended(d));
