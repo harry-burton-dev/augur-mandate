@@ -1,0 +1,116 @@
+@import 'tailwindcss/utilities' layer(utilities);
+@import '@augur/app-kit/theme.css';
+@source '.';
+
+/* Mandate's own layout; everything else is Quill's. */
+.mandate-glance {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.mandate-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: min(40rem, 100%);
+}
+.mandate-rail-act {
+  padding: 0 var(--space-2);
+}
+.mandate-branch-open:focus-visible {
+  outline: 1.5px solid var(--focus);
+  outline-offset: 2px;
+}
+.mandate-quiet {
+  font-size: var(--type-small);
+  color: var(--ink-muted);
+  margin: 0;
+}
+.mandate-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.mandate-statement {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: var(--measure-prose);
+}
+.mandate-statement dt {
+  font-size: var(--type-meta);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: var(--space-1);
+}
+.mandate-statement dd {
+  margin: 0;
+}
+.mandate-judgement {
+  margin: 0;
+}
+.mandate-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-left: 1px solid var(--hairline);
+}
+.mandate-tree-top {
+  padding-left: 0;
+  border-left: 0;
+}
+.mandate-branch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.mandate-branch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-inset);
+  background: var(--surface-pane);
+  border: 1px solid var(--hairline);
+}
+.mandate-branch-open {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+button.mandate-branch-open {
+  cursor: pointer;
+}
+.mandate-branch-title {
+  color: var(--ink);
+}
+.mandate-branch-title::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--floor);
+  margin-right: var(--space-2);
+  vertical-align: 0.1em;
+}
+.mandate-badge {
+  font-size: var(--type-meta);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--floor-team-high);
+  margin-right: var(--space-2);
+}
+.mandate-role {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
