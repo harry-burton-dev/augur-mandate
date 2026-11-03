@@ -2,6 +2,7 @@
   "name": "@apps/mandate",
   "version": "0.2.2",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "description": "Mandate's service: its API behind the gateway at /api/mandate.",
   "scripts": {
