@@ -1,5 +1,11 @@
 # @apps/mandate
 
+## 0.2.2
+
+### Patch Changes
+
+- e082ef2: Mandate is released from its own repository now, signed by this repository's release workflow. Nothing changes for people using it.
+
 ## 0.1.2
 
 ### Patch Changes
