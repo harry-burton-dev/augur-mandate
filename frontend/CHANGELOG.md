@@ -1,5 +1,31 @@
 # @apps/mandate-frontend
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [9e021dd]
+  - @augur/app-kit@0.3.0
+
+## 0.2.0
+
+### Minor Changes
+
+- 527a413: Mandate is on React and Quill (PER-243): the floor's intents, what you hold, one intent with its statement, line of sight, parts below and what it's bound to, its dialogs, the picker other apps open with `aim.pick` and its card on Home. The words, limits and behaviour are the same as before; it no longer uses the Lit kit. Quill's `Editor` and `DateField` take a `defaultValue` for when they keep their own value.
+
+### Patch Changes
+
+- Updated dependencies [527a413]
+- Updated dependencies [f8e9b46]
+- Updated dependencies [da54ae3]
+- Updated dependencies [7c8027d]
+- Updated dependencies [d500567]
+- Updated dependencies [a8854e2]
+- Updated dependencies [fccb126]
+- Updated dependencies [d64d724]
+  - @augur/app-kit@0.2.0
+  - @augur/mfe-sdk@1.10.0
+
 ## 0.1.5
 
 ### Patch Changes

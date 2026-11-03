@@ -1,6 +1,6 @@
 # Mandate
 
-Intent, passed down floor by floor: the intent pillar app. Working name; see [docs/mandate.md](../../docs/mandate.md).
+Intent, passed down floor by floor: the intent pillar app. It lives in its own repository and ships with AUGUR as a pillar app; AUGUR's guide to it is `docs/mandate.md` in the `im-platform` repository.
 
 | Path | What it is |
 | --- | --- |
@@ -10,4 +10,15 @@ Intent, passed down floor by floor: the intent pillar app. Working name; see [do
 
 In `service/src`: `store.ts` keeps intents (memory, or Postgres in schema `mandate`), `rules.ts` says who sees and does what, `app.ts` is the API.
 
-Run it in a stand-in shell with `pnpm dev:app mandate`. Test the service on Postgres too with `DATABASE_URL=… pnpm --filter @apps/mandate test`. See [Build an app](../../docs/build-an-app.md).
+Set `NODE_AUTH_TOKEN` to a token that can read GitHub Packages, then `pnpm install`, `pnpm test` and `pnpm build`. Test the service on Postgres too with `DATABASE_URL=… pnpm --filter @apps/mandate test`. AUGUR's `docs/build-an-app.md` covers running it in a shell.
+
+## Releases
+
+| Workflow | When | What |
+| --- | --- | --- |
+| CI | Every pull request | Lint, typecheck, test and build |
+| App previews | A pull request that changes the app | A signed preview its developers can run beside the app |
+| App dev builds | Every merge into main | A signed dev build for preview servers |
+| Release | Merging Version packages | The beta release `app/mandate@<version>`, then AUGUR's feed lists it |
+
+Each needs two secrets: `PACKAGES_READ_TOKEN` (reads AUGUR's packages, unless each package grants this repository access) and `APP_RELEASES_TOKEN` (starts AUGUR's release feed workflow).
