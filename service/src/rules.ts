@@ -1,3 +1,4 @@
+import type { Rights, Sight } from './api-types.ts';
 import { ENDED, type Intent } from './store.ts';
 
 /**
@@ -25,7 +26,7 @@ export interface Viewer {
   workspace: { id: string; kind: 'personal' | 'team' | 'org'; role: 'member' | 'lead' };
 }
 
-export type Sight = 'full' | 'summary';
+export type { Sight };
 
 /** They can stand on the intent's floor, or are standing on it now. Someone's own floor is only ever theirs. */
 export const onFloorOf = (v: Viewer, i: Intent) => (i.floorKind !== 'personal' && v.workspace.id === i.workspace) || v.principals.includes(i.floor);
@@ -69,25 +70,8 @@ export const needsRecheck = (i: Intent, parent: Intent | undefined) =>
 export const assessmentDue = (i: Intent, now = Date.now()) =>
   i.life === 'active' && now - Date.parse(i.ratedAt ?? i.updatedAt) > i.rhythmDays * 24 * 60 * 60 * 1000;
 
-/** What the viewer may do with an intent they see in full, so the app only offers what will work. */
-export interface Rights {
-  /** Change the draft statement and title, and issue it. */
-  edit: boolean;
-  /** Pass part of it down to a team below or a person on its floor. */
-  pass: boolean;
-  /** Say it back and accept it, or raise a concern; or confirm a back-brief still stands. */
-  backBrief: boolean;
-  /** Say how it's going. */
-  assess: boolean;
-  /** Bind entities and documents to it. */
-  bind: boolean;
-  /** Close it as achieved: whoever passed it down, or for an intent set on its own floor, its holder. */
-  achieve: boolean;
-  /** Withdraw it, and everything below it. */
-  withdraw: boolean;
-  /** Mark it the main effort among its siblings: its parent's holder. */
-  mainEffort: boolean;
-}
+/** What the viewer may do with an intent they see in full, so the app only offers what will work (see `api-types.ts`). */
+export type { Rights };
 
 export const rightsOn = (v: Viewer, i: Intent, parent: Intent | undefined): Rights => {
   const holder = holds(v, i) && !ended(i);

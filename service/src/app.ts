@@ -1,9 +1,29 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { callerCheckFromEnv, callerFromHeaders, health, packageVersion, PeopleUnavailable, signedCallers, type CallerCheck, type CallerWorkspace } from '@augur/service-kit';
+import type {
+  AddDocumentBody,
+  AssessBody,
+  BackBriefBody,
+  BindEntityBody,
+  Branch,
+  CreateBody,
+  Detail,
+  EditBody,
+  Floor,
+  HomeGlance,
+  MainEffortBody,
+  PassBody,
+  Rights,
+  SearchResults,
+  Summary,
+  Targets,
+  WithdrawBody,
+  Yours,
+} from './api-types.ts';
 import { auditFromEnv, type Audit } from './audit.ts';
 import { notifyFromEnv, type Notify } from './notices.ts';
 import { floorPrincipal, peopleFromEnv, type People } from './people.ts';
-import { assessmentDue, ended, maySet, needsRecheck, rightsOn, sightOf, type Rights, type Sight, type Viewer } from './rules.ts';
+import { assessmentDue, ended, maySet, needsRecheck, rightsOn, sightOf, type Sight, type Viewer } from './rules.ts';
 import {
   ConflictError,
   EMPTY_STATEMENT,
@@ -13,13 +33,10 @@ import {
   TOPICS,
   type Change,
   type DocumentBinding,
-  type DocumentRef,
   type EntityBinding,
-  type EntityRef,
   type Intent,
   type MandateStore,
   type OutboxEvent,
-  type Rating,
   type Statement,
 } from './store.ts';
 
@@ -40,28 +57,8 @@ export interface Options {
   now?: () => Date;
 }
 
-/** An intent as its summary shows it: in a tree, a list, or beside your own part. */
-export interface Summary {
-  id: string;
-  parent?: string;
-  root: string;
-  title: string;
-  floorName: string;
-  floorKind: Intent['floorKind'];
-  holder: string;
-  holderName: string;
-  life: Intent['life'];
-  version: number;
-  mainEffort: boolean;
-  byDate?: string;
-  rating?: Rating;
-  ratingNote?: string;
-  ratedAt?: string;
-  sight: Sight;
-}
-
-/** A summary with what's below it, as far as the viewer sees. */
-export type Branch = Summary & { below: Branch[] };
+/** An intent as its summary shows it, and with what's below it (see `api-types.ts`). */
+export type { Branch, Summary };
 
 const summaryOf = (i: Intent, sight: Sight): Summary => ({
   id: i.id,
@@ -201,7 +198,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
   };
 
   /** Everything the intent page shows. */
-  const detailOf = async (v: Viewer, { intent, tree, sight, byId, parent, can }: Loaded) => {
+  const detailOf = async (v: Viewer, { intent, tree, sight, byId, parent, can }: Loaded): Promise<Detail> => {
     const chain = intent.ancestors.map((a) => byId.get(a)).filter((a): a is Intent => Boolean(a));
     const [versions, backBriefs, assessments, entities, documents] = await Promise.all([
       store.versions(intent.id),
@@ -253,7 +250,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
   };
 
   /** What the viewer holds or is waiting to accept, on any floor. */
-  const yours = async (v: Viewer) => {
+  const yours = async (v: Viewer): Promise<Yours> => {
     const own = await store.heldBy(v.id);
     const floor = (await store.onFloor(v.workspace.id)).filter((i) => i.holder === 'floor');
     const held = [...own, ...floor.filter((i) => !own.some((o) => o.id === i.id))];
@@ -280,7 +277,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       // ---- a floor ----
 
       /** The intents on this floor: those set here or passed down to it, drafts, and what's closed. */
-      app.get('/floor', async (req, reply) => {
+      app.get('/floor', async (req, reply): Promise<Floor | FastifyReply> => {
         const v = await viewerOf(req, reply);
         if (!v) return reply;
         const here = await store.onFloor(v.workspace.id);
@@ -301,7 +298,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       });
 
       /** Sets a new intent on this floor, as a draft for its holder to write and issue. */
-      app.post<{ Body: { title: string; floorName?: string } }>(
+      app.post<{ Body: CreateBody }>(
         '/intents',
         { schema: { body: { type: 'object', additionalProperties: false, required: ['title'], properties: { title: TITLE, floorName: TEXT(120) } } } },
         async (req, reply) => {
@@ -348,7 +345,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       });
 
       /** Changes the draft: its title, statement, date and rhythm. Issuing makes it the next version. */
-      app.patch<{ Params: { id: string }; Body: { title?: string; statement?: Partial<Statement>; byDate?: string | null; rhythmDays?: number } }>(
+      app.patch<{ Params: { id: string }; Body: EditBody }>(
         '/intents/:id',
         {
           schema: {
@@ -439,7 +436,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
               { to: `person:${v.id}`, name: v.name, you: true },
               ...found.people.filter((p, n) => onIt[n] && p.id !== v.id).map((p) => ({ to: `person:${p.id}`, name: p.name, ...(p.email ? { email: p.email } : {}) })),
             ],
-          };
+          } satisfies Targets;
         },
       );
 
@@ -455,7 +452,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       };
 
       /** Passes part of an intent down: to a team directly below its floor, or a person on it. They back-brief it before it's under way. */
-      app.post<{ Params: { id: string }; Body: { to: string; title: string; purpose?: string; byDate?: string; carry?: { entities?: string[]; documents?: string[] } } }>(
+      app.post<{ Params: { id: string }; Body: PassBody }>(
         '/intents/:id/pass',
         {
           schema: {
@@ -553,7 +550,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
        * The receiver says the part back in their own words, and accepts it or
        * raises a concern. After the parent is revised, the same confirms theirs still stands.
        */
-      app.post<{ Params: { id: string }; Body: { words: string; concern?: string; outcome: 'accepted' | 'concern' } }>(
+      app.post<{ Params: { id: string }; Body: BackBriefBody }>(
         '/intents/:id/back-brief',
         {
           schema: {
@@ -601,7 +598,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       );
 
       /** The holder says how it's going. "Achieved" is their claim; whoever passed it down closes it. */
-      app.post<{ Params: { id: string }; Body: { rating: Rating; note?: string } }>(
+      app.post<{ Params: { id: string }; Body: AssessBody }>(
         '/intents/:id/assess',
         { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, required: ['rating'], properties: { rating: { enum: RATINGS }, note: TEXT(1000) } } } },
         async (req, reply) => {
@@ -662,7 +659,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
         return close(v, loaded, 'achieved', '', reply);
       });
 
-      app.post<{ Params: { id: string }; Body: { reason?: string } }>(
+      app.post<{ Params: { id: string }; Body: WithdrawBody }>(
         '/intents/:id/withdraw',
         { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, properties: { reason: TEXT(1000) } } } },
         async (req, reply) => {
@@ -676,7 +673,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       );
 
       /** Marks the part that matters most among its siblings, or unmarks it. One per parent. */
-      app.post<{ Params: { id: string }; Body: { on: boolean } }>(
+      app.post<{ Params: { id: string }; Body: MainEffortBody }>(
         '/intents/:id/main-effort',
         { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, required: ['on'], properties: { on: { type: 'boolean' } } } } },
         async (req, reply) => {
@@ -695,7 +692,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
 
       // ---- what it's bound to ----
 
-      app.post<{ Params: { id: string }; Body: { entity: EntityRef; role: string } }>(
+      app.post<{ Params: { id: string }; Body: BindEntityBody }>(
         '/intents/:id/entities',
         { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, required: ['entity', 'role'], properties: { entity: ENTITY_REF, role: { type: 'string', pattern: '^[a-z][a-z-]{1,30}$' } } } } },
         async (req, reply) => {
@@ -735,7 +732,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
         },
       );
 
-      app.post<{ Params: { id: string }; Body: { document: DocumentRef } }>(
+      app.post<{ Params: { id: string }; Body: AddDocumentBody }>(
         '/intents/:id/documents',
         { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, required: ['document'], properties: { document: DOCUMENT_REF } } } },
         async (req, reply) => {
@@ -851,7 +848,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
               // On a team's floor the person is on, it opens there; anything else opens from where they are.
               ...(i.workspace !== v.workspace.id && v.principals.includes(`team:${i.workspace}`) ? { workspace: i.workspace } : {}),
             })),
-        };
+        } satisfies SearchResults;
       });
 
       // ---- the person ----
@@ -864,7 +861,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       });
 
       /** Home's card: what's waiting for the person, and how this floor's intents are going. */
-      app.get('/home', async (req, reply) => {
+      app.get('/home', async (req, reply): Promise<HomeGlance | FastifyReply> => {
         const v = await viewerOf(req, reply);
         if (!v) return reply;
         const mine = await yours(v);

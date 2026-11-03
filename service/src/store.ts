@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
+import type * as Wire from './api-types.ts';
 
 /**
  * Mandate's records. An intent is one row that refers to its parent; what
@@ -9,32 +10,19 @@ import pg from 'pg';
  */
 
 /** Where an intent is in its life. Separate from how its holder judges it is going (`Rating`). */
-export const LIVES = ['draft', 'passed', 'active', 'achieved', 'superseded', 'withdrawn'] as const;
-export type Life = (typeof LIVES)[number];
+export const LIVES = ['draft', 'passed', 'active', 'achieved', 'superseded', 'withdrawn'] as const satisfies readonly Life[];
+export type Life = Wire.Life;
 /** Lives that are over: kept, shown under "Closed", never changed again. */
 export const ENDED: readonly Life[] = ['achieved', 'superseded', 'withdrawn'];
 
-export const RATINGS = ['on_track', 'at_risk', 'blocked', 'achieved'] as const;
-export type Rating = (typeof RATINGS)[number];
+export const RATINGS = ['on_track', 'at_risk', 'blocked', 'achieved'] as const satisfies readonly Rating[];
+export type Rating = Wire.Rating;
 
 /** The roles an entity plays in an intent, agreed with Data Atlas. An open string; these four are documented. */
 export const ROLES = ['subject', 'resource', 'area', 'related'] as const;
 
-/**
- * An intent in words, in the shape allied orders use: a one-line mission
- * (who, what, when, where), the purpose it serves, the end state that means
- * it's done, the key tasks, what must be done (constraints), what must not be
- * done (restraints), and what the holder may decide for themselves (freedoms).
- */
-export interface Statement {
-  mission: string;
-  purpose: string;
-  endState: string;
-  keyTasks: string[];
-  constraints: string;
-  restraints: string;
-  freedoms: string;
-}
+/** An intent in words, in the shape allied orders use (see `api-types.ts`). */
+export type Statement = Wire.Statement;
 
 export const EMPTY_STATEMENT: Statement = { mission: '', purpose: '', endState: '', keyTasks: [], constraints: '', restraints: '', freedoms: '' };
 
@@ -48,7 +36,7 @@ export interface Intent {
   workspace: string;
   /** Who its floor lets in: `person:<id>`, `tree:<team>` or `org`. */
   floor: string;
-  floorKind: 'personal' | 'team' | 'org';
+  floorKind: Wire.FloorKind;
   floorName: string;
   /** `person:<id>`, or `floor`: the leads of its floor hold it for the team. */
   holder: string;
@@ -92,46 +80,25 @@ export interface Version {
   issuedAt: string;
 }
 
-export interface BackBrief {
-  id: string;
+/** A back-brief as kept: what the page shows, and who gave it and to which intent. */
+export interface BackBrief extends Wire.BackBrief {
   intent: string;
-  /** The version of the intent it answers. */
-  version: number;
-  /** The parent's version at the time. */
-  parentVersion: number;
   by: string;
-  byName: string;
-  words: string;
-  concern: string;
-  outcome: 'accepted' | 'concern';
-  at: string;
 }
 
-export interface Assessment {
-  id: string;
+/** An assessment as kept: what the page shows, and who made it and of which intent. */
+export interface Assessment extends Wire.Assessment {
   intent: string;
   by: string;
-  byName: string;
-  rating: Rating;
-  note: string;
-  at: string;
 }
 
 /** An entity from Data Atlas, as Mandate keeps a reference to it. The label is a cached name and may be stale. */
-export interface EntityRef {
-  kind: 'entity';
-  id: string;
-  type: string;
+export interface EntityRef extends Omit<Wire.EntityRef, 'label' | 'at'> {
   label: string;
 }
 
 /** A document, as apps pass them (the SDK's DocumentRef). */
-export interface DocumentRef {
-  app: string;
-  id: string;
-  title: string;
-  version?: string;
-}
+export type DocumentRef = Wire.DocumentRef;
 
 export interface EntityBinding {
   intent: string;
