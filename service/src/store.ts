@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
+import { steadyPool } from '@augur/service-kit';
 import type * as Wire from './api-types.ts';
 
 /**
@@ -428,14 +429,14 @@ export class PgMandateStore implements MandateStore {
   }
 
   static async connect(connectionString: string) {
-    const store = new PgMandateStore(new pg.Pool({ connectionString }));
+    const store = new PgMandateStore(steadyPool(new pg.Pool({ connectionString })));
     await store.migrate();
     return store;
   }
 
   /** A connection pool whose search path is Mandate's schema, for the outbox relay, which names its table plainly. */
   static outboxPool(connectionString: string) {
-    return new pg.Pool({ connectionString, max: 2, options: '-c search_path=mandate' });
+    return steadyPool(new pg.Pool({ connectionString, max: 2, options: '-c search_path=mandate' }));
   }
 
   /** Brings the schema up to date. Safe to run from several instances at once. */
