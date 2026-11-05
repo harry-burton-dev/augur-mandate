@@ -1,5 +1,5 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
-import { callerCheckFromEnv, callerFromHeaders, health, packageVersion, PeopleUnavailable, signedCallers, type CallerCheck, type CallerWorkspace } from '@augur/service-kit';
+import { callerCheckFromEnv, callerFromHeaders, health, packageVersion, PeopleUnavailable, signedCallers, type CallerCheck, type CallerWorkspace, type NewInboxItem } from '@augur/service-kit';
 import type {
   AddDocumentBody,
   AssessBody,
@@ -21,6 +21,7 @@ import type {
   Yours,
 } from './api-types.ts';
 import { auditFromEnv, type Audit } from './audit.ts';
+import { backBriefKey, INBOX_KINDS, inboxFromEnv, type MandateInbox } from './inbox.ts';
 import { notifyFromEnv, type Notify } from './notices.ts';
 import { floorPrincipal, peopleFromEnv, type People } from './people.ts';
 import { assessmentDue, ended, maySet, needsRecheck, rightsOn, sightOf, type Sight, type Viewer } from './rules.ts';
@@ -53,6 +54,8 @@ export interface Options {
   store?: MandateStore;
   audit?: Audit;
   notify?: Notify;
+  /** Where a part's back-brief waits in the shell's Inbox. */
+  inbox?: MandateInbox;
   people?: People;
   now?: () => Date;
 }
@@ -121,7 +124,7 @@ const lifeWords: Record<Intent['life'], string> = { draft: 'Draft', passed: 'Wai
 
 const personOf = (holder: string) => (holder.startsWith('person:') ? holder.slice('person:'.length) : undefined);
 
-export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store = new MemoryMandateStore(), audit, notify, people = peopleFromEnv(), now = () => new Date() }: Options = {}) => {
+export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store = new MemoryMandateStore(), audit, notify, inbox, people = peopleFromEnv(), now = () => new Date() }: Options = {}) => {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
   const record = audit ?? auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
   const tell = notify ?? notifyFromEnv((notice) => app.log.info({ notice }, 'notification (no notifications here)'));
@@ -129,6 +132,25 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
     record(entry).catch((err: Error) => app.log.error({ err: err.message, action: entry.action, target: entry.target }, 'could not record in the audit log'));
   const told = (notice: Parameters<Notify>[0]) =>
     notice.recipients.length ? tell(notice).catch((err: Error) => app.log.error({ err: err.message, title: notice.title }, 'could not tell people')) : Promise.resolve();
+  const work = inbox ?? inboxFromEnv((what) => app.log.info({ inbox: what }, 'inbox item (no inbox here)'));
+  const waiting = (key: string, workspace: string, item: NewInboxItem) => work.put(key, workspace, item).catch((err: Error) => app.log.error({ err: err.message, key }, 'could not put work in an inbox'));
+  const settled = (key: string, state: 'done' | 'withdrawn') => work.close(key, state).catch((err: Error) => app.log.error({ err: err.message, key }, 'could not close an inbox item'));
+  /** A part's back-brief, waiting on whoever holds it: the person, or the team's leads, who say it back for the team. */
+  const backBriefItem = (part: Intent, detail: string, from: string, reopen = false): NewInboxItem => {
+    const person = personOf(part.holder);
+    return {
+      kind: INBOX_KINDS.backBrief,
+      owner: person ? { kind: 'person', id: person } : { kind: 'team', id: part.workspace, role: 'lead' },
+      title: part.title,
+      detail,
+      subject: { kind: 'ref', app: 'mandate', type: 'intent', id: part.id, label: part.title },
+      path: `/intents/${part.id}`,
+      // Saying it back is Mandate's own step: a concern is raised there, not by declining.
+      allow: { decline: false, handOn: false, selfComplete: false },
+      from,
+      ...(reopen ? { reopen: true } : {}),
+    };
+  };
 
   // Only the gateway's signed word says who is calling: headers anyone could send are dropped.
   app.addHook('onRequest', signedCallers(callers));
@@ -413,6 +435,8 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
               needsYou: true,
               link: `/intents/${part.id}`,
             });
+        if (number > 1)
+          for (const part of parts) await waiting(backBriefKey(part.id), part.workspace, backBriefItem(part, `${intent.title} is at version ${number}. Say whether this still fits.`, v.id, true));
         return detailOf(v, { ...loaded, intent: next, can: rightsOn(v, next, loaded.parent) });
       });
 
@@ -542,6 +566,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
             needsYou: true,
             link: `/intents/${id}`,
           });
+          await waiting(backBriefKey(id), part.workspace, backBriefItem(part, `Part of ${intent.title}. Say it back in your own words to accept it.`, v.id));
           return reply.code(201).send(summaryOf(part, 'full'));
         },
       );
@@ -585,6 +610,8 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
             events: accepted ? [event(TOPICS.accepted, intent, { version: intent.version })] : [],
           });
           await recorded({ actor: v.id, action: accepted ? 'intent.accepted' : 'intent.concern-raised', target: intent.id, workspace: intent.workspace, detail: { title: intent.title } });
+          // Said back: the work is done. A concern leaves it waiting, for the answer and another try.
+          if (accepted) await settled(backBriefKey(intent.id), 'done');
           await told({
             recipients: giverOf(intent, parent).filter((p) => p !== v.id),
             workspace: parent?.workspace ?? intent.workspace,
@@ -643,6 +670,8 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
           events: [event(life === 'achieved' ? TOPICS.achieved : TOPICS.withdrawn, intent), ...parts.map((p) => event(life === 'achieved' ? TOPICS.superseded : TOPICS.withdrawn, p))],
         });
         await recorded({ actor: v.id, action: `intent.${life}`, target: intent.id, workspace: intent.workspace, detail: { title: intent.title, ...(reason ? { reason } : {}), parts: parts.length } });
+        // A back-brief still waiting has nothing left to say back to.
+        for (const d of [intent, ...below]) if (d.life === 'passed' || needsRecheck(d, d.parent ? loaded.byId.get(d.parent) : undefined)) await settled(backBriefKey(d.id), 'withdrawn');
         for (const i of [intent, ...below]) {
           const recipients = (await holdersOf(i)).filter((p) => p !== v.id);
           await told({ recipients, workspace: i.workspace, title: `${i === intent ? i.title : intent.title} was ${life === 'achieved' ? 'achieved' : 'withdrawn'}`, ...(i !== intent ? { detail: `So “${i.title}” is closed.` } : reason ? { detail: reason } : {}), link: `/intents/${i.id}` });
