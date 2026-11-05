@@ -1,19 +1,7 @@
-import type { DocumentRef, EntityRef, MountContext } from '@augur/mfe-sdk';
-import type {
-  AssessBody,
-  BackBriefBody,
-  Detail,
-  EditBody,
-  Floor,
-  HomeGlance,
-  PassBody,
-  Problem,
-  Rating,
-  SearchResults,
-  Summary,
-  Targets,
-  Yours,
-} from '../../service/src/api-types.js';
+import { createAppClient, type AppClient, type AppFetcher } from '@augur/app-kit';
+import type { DocumentRef, EntityRef } from '@augur/mfe-sdk';
+import manifest from '../../manifest.json';
+import type { EditBody, MandatePaths, PassBody, BackBriefBody, Rating } from '../../service/src/api-types.js';
 
 export type { EntityRef };
 // The wire types are written once, in the service's api-types.ts, and shared with it.
@@ -43,103 +31,79 @@ export interface IntentRef {
   title: string;
 }
 
-/** Where Mandate is: a floor's list, what you hold, or one intent. */
-export type Place = { view: 'floor' } | { view: 'yours' } | { view: 'intent'; id: string };
-
-export const placeFor = (path: string): Place => {
-  const [, first, second] = path.split('/');
-  if (first === 'yours') return { view: 'yours' };
-  if (first === 'intents' && second) return { view: 'intent', id: decodeURIComponent(second) };
-  return { view: 'floor' };
-};
-
-export const pathFor = (place: Place) => (place.view === 'yours' ? '/yours' : place.view === 'intent' ? `/intents/${encodeURIComponent(place.id)}` : '/');
-
-/** Something Mandate's service refused, in words people can act on. */
-export class MandateError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly code?: string,
-  ) {
-    super(message);
-  }
-}
-
 export const RATING_WORDS: Record<Rating, string> = { on_track: 'On track', at_risk: 'At risk', blocked: 'Blocked', achieved: 'Achieved' };
 export const ROLE_WORDS: Record<string, string> = { subject: 'Subject', resource: 'Resource', area: 'Area', related: 'Related' };
 
+/** Where the gateway sends Mandate's calls: its own service, at its manifest id. */
+export const API = `/api/${manifest.id}/v1`;
+
+/**
+ * Mandate's service, through the gateway: each call goes through `ctx.fetch`, so it carries the
+ * person's token and the floor, is checked against `MandatePaths`, and fails with an AppError
+ * whose message people can act on.
+ */
 export class MandateApi {
-  constructor(private readonly fetchOnFloor: MountContext['fetch']) {}
-
-  private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await this.fetchOnFloor(`/api/mandate/v1${path}`, {
-      method,
-      ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-    });
-    if (!res.ok) {
-      const problem = (await res.json().catch(() => ({}))) as Partial<Problem>;
-      throw new MandateError(res.status >= 500 || !problem.message ? 'Mandate isn’t answering. Try again in a moment.' : problem.message, res.status, problem.error);
-    }
-    return (res.status === 204 ? undefined : await res.json()) as T;
+  private readonly client: AppClient<MandatePaths>;
+  constructor(ctx: AppFetcher) {
+    this.client = createAppClient<MandatePaths>(ctx, { base: API, appName: manifest.name });
   }
 
-  floor() {
-    return this.call<Floor>('GET', '/floor');
+  floor(signal?: AbortSignal) {
+    return this.client.get('/floor', { signal });
   }
-  yours() {
-    return this.call<Yours>('GET', '/me');
+  yours(signal?: AbortSignal) {
+    return this.client.get('/me', { signal });
   }
-  home() {
-    return this.call<HomeGlance>('GET', '/home');
+  home(signal?: AbortSignal) {
+    return this.client.get('/home', { signal });
   }
   /** Intents the person can read, by the words of their title. */
   search(q: string) {
-    return this.call<SearchResults>('GET', `/search?q=${encodeURIComponent(q)}`);
+    return this.client.get('/search', { query: { q } });
   }
-  intent(id: string) {
-    return this.call<Detail>('GET', `/intents/${encodeURIComponent(id)}`);
+  intent(id: string, signal?: AbortSignal) {
+    return this.client.get('/intents/{id}', { params: { id }, signal });
   }
   create(title: string, floorName: string) {
-    return this.call<Summary>('POST', '/intents', { title, floorName });
+    return this.client.post('/intents', { body: { title, floorName } });
   }
   edit(id: string, change: EditBody) {
-    return this.call<Detail>('PATCH', `/intents/${encodeURIComponent(id)}`, change);
+    return this.client.patch('/intents/{id}', { params: { id }, body: change });
   }
   issue(id: string) {
-    return this.call<Detail>('POST', `/intents/${encodeURIComponent(id)}/issue`);
+    return this.client.post('/intents/{id}/issue', { params: { id } });
   }
   targets(id: string, q: string) {
-    return this.call<Targets>('GET', `/intents/${encodeURIComponent(id)}/targets?q=${encodeURIComponent(q)}`);
+    return this.client.get('/intents/{id}/targets', { params: { id }, query: { q } });
   }
   pass(id: string, part: PassBody) {
-    return this.call<Summary>('POST', `/intents/${encodeURIComponent(id)}/pass`, part);
+    return this.client.post('/intents/{id}/pass', { params: { id }, body: part });
   }
   backBrief(id: string, brief: BackBriefBody) {
-    return this.call<Detail>('POST', `/intents/${encodeURIComponent(id)}/back-brief`, brief);
+    return this.client.post('/intents/{id}/back-brief', { params: { id }, body: brief });
   }
   assess(id: string, rating: Rating, note: string) {
-    return this.call<Detail>('POST', `/intents/${encodeURIComponent(id)}/assess`, { rating, note } satisfies AssessBody);
+    return this.client.post('/intents/{id}/assess', { params: { id }, body: { rating, note } });
   }
   achieve(id: string) {
-    return this.call<Detail>('POST', `/intents/${encodeURIComponent(id)}/achieve`);
+    return this.client.post('/intents/{id}/achieve', { params: { id } });
   }
   withdraw(id: string, reason: string) {
-    return this.call<Detail>('POST', `/intents/${encodeURIComponent(id)}/withdraw`, { reason });
+    return this.client.post('/intents/{id}/withdraw', { params: { id }, body: { reason } });
   }
   mainEffort(id: string, on: boolean) {
-    return this.call<Detail>('POST', `/intents/${encodeURIComponent(id)}/main-effort`, { on });
+    return this.client.post('/intents/{id}/main-effort', { params: { id }, body: { on } });
   }
   bindEntity(id: string, entity: EntityRef, role: string) {
-    return this.call<Detail>('POST', `/intents/${encodeURIComponent(id)}/entities`, { entity, role });
+    return this.client.post('/intents/{id}/entities', { params: { id }, body: { entity, role } });
   }
   unbindEntity(id: string, entity: string, role: string) {
-    return this.call<Detail>('DELETE', `/intents/${encodeURIComponent(id)}/entities/${encodeURIComponent(entity)}?role=${encodeURIComponent(role)}`);
+    return this.client.delete('/intents/{id}/entities/{entity}', { params: { id, entity }, query: { role } });
   }
   addDocument(id: string, document: DocumentRef) {
-    return this.call<Detail>('POST', `/intents/${encodeURIComponent(id)}/documents`, { document });
+    return this.client.post('/intents/{id}/documents', { params: { id }, body: { document } });
   }
   removeDocument(id: string, document: DocumentRef) {
-    return this.call<Detail>('DELETE', `/intents/${encodeURIComponent(id)}/documents/${encodeURIComponent(document.app)}/${encodeURIComponent(document.id)}`);
+    return this.client.delete('/intents/{id}/documents/{app}/{doc}', { params: { id, app: document.app, doc: document.id } });
   }
 }

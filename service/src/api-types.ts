@@ -246,3 +246,43 @@ export interface Problem {
   error: string;
   message: string;
 }
+
+// ---------------------------------------------------------------------------
+// The routes the frontend calls, in the shape openapi-typescript writes a `paths` type, so Quill's
+// `createAppClient<MandatePaths>` checks each call's path, parameters, body and answer. Every path is
+// below the gateway's `/api/mandate/v1`. Other apps' routes (`/intents/{id}/context`,
+// `/entities/{entity}/intents`) are left out until the service writes its contract from its routes (ADR 0055).
+
+type Json<T> = { content: { 'application/json': T } };
+type Takes = { path?: object; query?: object; body?: object };
+/** One call: what it answers (with 200, or 201 for `Made`), and what it takes. */
+type Call<Answer, Take extends Takes = Record<never, never>, Status extends 200 | 201 = 200> = {
+  parameters: {
+    path: Take extends { path: infer P } ? P : never;
+    query: Take extends { query: infer Q } ? Q : never;
+  };
+  responses: { [S in Status]: Json<Answer> };
+} & (Take extends { body: infer B } ? { requestBody: Json<B> } : Record<never, never>);
+type Made<Answer, Take extends Takes> = Call<Answer, Take, 201>;
+type ById = { id: string };
+
+export interface MandatePaths {
+  '/floor': { get: Call<Floor> };
+  '/me': { get: Call<Yours> };
+  '/home': { get: Call<HomeGlance> };
+  '/search': { get: Call<SearchResults, { query: { q?: string } }> };
+  '/intents': { post: Made<Summary, { body: CreateBody }> };
+  '/intents/{id}': { get: Call<Detail, { path: ById }>; patch: Call<Detail, { path: ById; body: EditBody }> };
+  '/intents/{id}/issue': { post: Call<Detail, { path: ById }> };
+  '/intents/{id}/targets': { get: Call<Targets, { path: ById; query: { q?: string } }> };
+  '/intents/{id}/pass': { post: Made<Summary, { path: ById; body: PassBody }> };
+  '/intents/{id}/back-brief': { post: Call<Detail, { path: ById; body: BackBriefBody }> };
+  '/intents/{id}/assess': { post: Call<Detail, { path: ById; body: AssessBody }> };
+  '/intents/{id}/achieve': { post: Call<Detail, { path: ById }> };
+  '/intents/{id}/withdraw': { post: Call<Detail, { path: ById; body: WithdrawBody }> };
+  '/intents/{id}/main-effort': { post: Call<Detail, { path: ById; body: MainEffortBody }> };
+  '/intents/{id}/entities': { post: Call<Detail, { path: ById; body: BindEntityBody }> };
+  '/intents/{id}/entities/{entity}': { delete: Call<Detail, { path: ById & { entity: string }; query: { role: string } }> };
+  '/intents/{id}/documents': { post: Call<Detail, { path: ById; body: AddDocumentBody }> };
+  '/intents/{id}/documents/{app}/{doc}': { delete: Call<Detail, { path: ById & { app: string; doc: string } }> };
+}

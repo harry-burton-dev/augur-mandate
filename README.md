@@ -12,6 +12,8 @@ Intent, passed down floor by floor: the intent pillar app. It lives in its own r
 
 In `service/src`: `index.ts` starts it with the service kit's app-service starter (`startAppService`: settings checked, jobs, frontend, registration, shutdown), `store.ts` keeps intents (memory, or Postgres in schema `mandate`), `rules.ts` says who sees and does what, `app.ts` is the API, and `inbox.ts` puts a part's back-brief in the shell's Inbox of whoever holds it (the person, or the team's leads) until it's said back, which needs the `inbox:write` scope an admin allows in Admin, Apps.
 
+In `frontend/src`, Mandate is built on SDK 2 with Quill's app starter: `entry.tsx` hands `defineReactApp` the app, its places, the intents that open it (`mandate.open`, `aim.open`), the `aim.pick` picker and the Home card. `app.tsx` holds its places on the address bar (`placeRoutes`: `/`, `/yours`, `/intents/:id`) and loads with `useData`, kept per floor; `api.ts` calls the service with `createAppClient`, checked against `MandatePaths` in `service/src/api-types.ts`, where the wire types are written once.
+
 Set `NODE_AUTH_TOKEN` to a token that can read GitHub Packages, then `pnpm install`, `pnpm test` and `pnpm build`. Test the service on Postgres too with `DATABASE_URL=… pnpm --filter @apps/mandate test`. AUGUR's `docs/build-an-app.md` covers running it in a shell.
 
 ## Releases

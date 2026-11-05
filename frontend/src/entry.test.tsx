@@ -1,16 +1,17 @@
-import { createEventBus, type MountContext, type Workspace } from '@augur/mfe-sdk';
+import type { Workspace } from '@augur/mfe-sdk';
+import { fakeContext, type FakeContextOptions } from '@augur/mfe-sdk/testing';
 import { act } from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import app, { AIM_OPEN, AIM_PICK, MANDATE_OPEN, addressFor, placeForIntent } from './entry.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import manifest from '../../manifest.json';
+import app, { AIM_OPEN, AIM_PICK, MANDATE_OPEN, startFor } from './entry.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const floor: Workspace = {
+const floor: Partial<Workspace> = {
   id: 'eng',
   kind: 'team',
   name: 'Engineering',
   slug: 'eng',
-  path: [],
   role: 'lead',
 };
 
@@ -103,7 +104,9 @@ const DETAIL = {
 };
 
 /** Answers Mandate's service the way it would for a lead on Engineering. */
-const service = vi.fn(async (path: string) => {
+const service = vi.fn(async (input: RequestInfo | URL) => {
+  const path = new URL(String(input)).pathname;
+  if (!path.startsWith(`/api/${manifest.id}/v1/`)) return new Response(null, { status: 404 });
   if (path.endsWith('/v1/floor'))
     return Response.json({
       intents: [
@@ -144,130 +147,120 @@ const service = vi.fn(async (path: string) => {
   return new Response(null, { status: 404 });
 });
 
-const ctx = (over: Partial<MountContext> = {}): MountContext => ({
-  user: { id: 'dana', name: 'Dana Reyes', departments: [], roles: [] },
-  getToken: async () => 't',
-  bus: createEventBus(),
-  raise: vi.fn(async () => {}),
-  request: vi.fn(),
-  notify: vi.fn(),
-  path: '/',
-  workspace: floor,
-  getWorkspace: () => floor,
-  previewOn: () => false,
-  fetch: service as unknown as MountContext['fetch'],
-  ...over,
-});
+/** The shell's mount context on Engineering, its fetch ending at the service above. */
+const ctx = (over: FakeContextOptions = {}) => fakeContext({ workspace: floor, fetch: service as unknown as typeof fetch, ...over });
 
-/** Lets the service's answers land and React draw them. */
+/** Where Mandate is mounted on Engineering, as the address bar has it. */
+const ROUTE = `/t/eng${manifest.route}`;
+
+/** Lets the service's answers land, and the router and React draw them. */
 const settle = async () => {
-  for (let n = 0; n < 5; n++) await act(async () => new Promise((r) => setTimeout(r, 0)));
+  for (let n = 0; n < 8; n++) await act(async () => new Promise((r) => setTimeout(r, 0)));
 };
 const press = (b: Element | undefined) => act(() => (b as HTMLElement).click());
 const button = (el: Element, words: string) => [...el.querySelectorAll('button')].find((b) => b.textContent?.includes(words));
 const rows = (el: Element) => [...el.querySelectorAll('.quill-list-row')];
-const mounted = async (over: Partial<MountContext> = {}) => {
+
+const open: HTMLElement[] = [];
+/** Mounts Mandate at `path` below its route, as the shell does. */
+const mounted = async (path = '/', over: FakeContextOptions = {}) => {
+  window.history.replaceState(null, '', `${ROUTE}${path === '/' ? '' : path}`);
   const el = document.body.appendChild(document.createElement('div'));
-  await act(() => void app.mount(el, ctx(over)));
+  const c = ctx({ path, ...over });
+  open.push(el);
+  await act(() => void app.mount(el, c));
   await settle();
-  return el;
+  return { el, c };
 };
+afterEach(async () => {
+  for (const el of open.splice(0)) await act(() => void app.unmount(el));
+});
 
 describe('mandate', () => {
-  it('opens at the place its address or an intent names', () => {
-    expect(placeForIntent({ type: AIM_OPEN, payload: { id: 'a1' } })).toEqual({
-      view: 'intent',
-      id: 'a1',
-    });
-    expect(placeForIntent({ type: MANDATE_OPEN, payload: { path: '/yours' } })).toEqual({ view: 'yours' });
-    expect(placeForIntent({ type: 'document.open', payload: {} })).toBeUndefined();
-    expect(
-      addressFor('/t/eng/mandate/yours', '/yours', {
-        view: 'intent',
-        id: 'a1',
-      }),
-    ).toBe('/t/eng/mandate/intents/a1');
-    expect(addressFor('/t/eng/mandate', '/', { view: 'yours' })).toBe('/t/eng/mandate/yours');
+  it('opens at the place an intent names', () => {
+    expect(startFor[AIM_OPEN]!({ id: 'a1' })).toBe('/intents/a1');
+    expect(startFor[MANDATE_OPEN]!({ path: '/yours' })).toBe('/yours');
+    expect(startFor[MANDATE_OPEN]!({ path: 'https://elsewhere' })).toBeUndefined();
+    expect(startFor[AIM_OPEN]!({})).toBeUndefined();
   });
 
   it('shows the floor’s intent, and clears up on unmount', async () => {
-    const el = await mounted();
+    const { el } = await mounted();
     expect(el.querySelector('.quill-card-title')!.textContent).toBe('Keep the fleet at sea');
     expect(el.querySelector('.quill-tally-words')!.textContent).toContain('1 at risk');
-    await act(() => void app.unmount!(el));
+    await act(() => void app.unmount(el));
     expect(el.textContent).toBe('');
   });
 
+  it('goes to an intent on the address bar, and Back comes to the floor again', async () => {
+    const { el } = await mounted();
+    await press(el.querySelector('.quill-card-title')!.closest('button') ?? el.querySelector('.quill-card-title')!);
+    await settle();
+    expect(window.location.pathname).toBe(`${ROUTE}/intents/a1`);
+    expect(el.querySelector('.mandate-statement')).not.toBeNull();
+    await act(async () => window.history.back());
+    await settle();
+    expect(window.location.pathname).toBe(ROUTE);
+    expect(el.querySelector('.quill-card-title')!.textContent).toBe('Keep the fleet at sea');
+  });
+
   it('shows an intent’s statement, its parts below and what it’s bound to, and opens the entity in Data Atlas', async () => {
-    const raise = vi.fn(async () => {});
-    const el = await mounted({ path: '/intents/a1', raise });
+    const { el, c } = await mounted('/intents/a1');
     const statement = [...el.querySelectorAll('.mandate-statement dd')].map((p) => p.textContent);
     for (const words of ['So the coast is watched', 'No overtime', 'Refit Hull 4']) expect(statement).toContain(words);
     for (const words of ['Refit Hull 4', 'Two hulls in dock']) expect(el.textContent).toContain(words);
     const chip = el.querySelector('.quill-ref-open')!;
     expect(chip.textContent).toContain('HMS Example');
     await press(chip);
-    expect(raise).toHaveBeenCalledWith({
-      type: 'entity.open',
-      payload: {
-        kind: 'entity',
-        id: 'ent_01J0000000000000000000SHIP',
-        type: 'ship',
-        label: 'HMS Example',
+    expect(c.raised).toEqual([
+      {
+        type: 'entity.open',
+        payload: {
+          kind: 'entity',
+          id: 'ent_01J0000000000000000000SHIP',
+          type: 'ship',
+          label: 'HMS Example',
+        },
       },
-    });
+    ]);
   });
 
   it('says why entities can’t be bound while no app picks them, rather than hiding it', async () => {
-    const request = vi.fn(async () => {
-      const { IntentError } = await import('@augur/mfe-sdk');
-      throw new IntentError('No app handles entity.pick');
-    });
-    const el = await mounted({
-      path: '/intents/a1',
-      request: request as unknown as MountContext['request'],
-    });
+    // No answer for entity.pick: the fake shell says no app handles it, as AUGUR does without Data Atlas.
+    const { el, c } = await mounted('/intents/a1');
     await press(button(el, 'Bind an entity'));
     await settle();
-    expect(request).toHaveBeenCalledWith({
-      type: 'entity.pick',
-      payload: { purpose: 'Bind to this intent' },
-    });
+    expect(c.requested).toEqual([{ type: 'entity.pick', payload: { purpose: 'Bind to this intent' } }]);
     expect(button(el, 'Bind an entity')!.getAttribute('aria-disabled')).toBe('true');
     expect(el.textContent).toContain('Linking to entities arrives with Data Atlas.');
   });
 
   it('answers aim.pick with the intent chosen', async () => {
-    const respond = vi.fn();
-    const el = await mounted({
-      intent: { type: AIM_PICK, payload: { purpose: 'Brief on' } },
-      reply: { respond, cancel: vi.fn() },
-    });
+    const { el, c } = await mounted('/', { intent: { type: AIM_PICK, payload: { purpose: 'Brief on' } }, reply: true });
     expect(el.textContent).toContain('Brief on');
     await press(rows(el)[0]);
-    expect(respond).toHaveBeenCalledWith({
-      kind: 'intent',
-      app: 'mandate',
-      id: 'a1',
-      title: 'Keep the fleet at sea',
-    });
+    expect(c.reply!.responses).toEqual([
+      {
+        kind: 'intent',
+        app: 'mandate',
+        id: 'a1',
+        title: 'Keep the fleet at sea',
+      },
+    ]);
   });
 
   it('shows what’s waiting on Home, and opens it', async () => {
-    const raise = vi.fn(async () => {});
+    const c = ctx();
     const el = document.body.appendChild(document.createElement('div'));
-    await act(() => void app.surfaces!['./Glance']!.mount(el, ctx({ raise })));
+    await act(() => void app.surfaces['./Glance']!.mount(el, c));
     await settle();
     expect(el.textContent).toContain('What you hold (1)');
     await press(rows(el)[0]);
-    expect(raise).toHaveBeenCalledWith({
-      type: AIM_OPEN,
-      payload: { id: 'a2' },
-    });
     await press(button(el, 'What you hold'));
-    expect(raise).toHaveBeenCalledWith({
-      type: MANDATE_OPEN,
-      payload: { path: '/yours' },
-    });
+    expect(c.raised).toEqual([
+      { type: AIM_OPEN, payload: { id: 'a2' } },
+      { type: MANDATE_OPEN, payload: { path: '/yours' } },
+    ]);
+    await act(() => void app.surfaces['./Glance']!.unmount(el));
   });
 });
