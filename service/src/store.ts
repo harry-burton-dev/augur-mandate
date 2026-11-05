@@ -54,8 +54,12 @@ export interface Intent {
   mainEffort: boolean;
   /** When it should be done by (YYYY-MM-DD). */
   byDate?: string;
-  /** How often its holder is asked for an assessment, in days. */
+  /** How often its holder is asked for an assessment, in days: the rule `FREQ=DAILY;INTERVAL=<days>` unless `rhythm` says otherwise. */
   rhythmDays: number;
+  /** How often its holder is asked for an assessment, as an RFC 5545 RRULE without DTSTART (ADR 0061). */
+  rhythm?: string;
+  /** When a part passed down should be back-briefed by (YYYY-MM-DD). */
+  briefBy?: string;
   /** The holder's latest judgement. */
   rating?: Rating;
   ratingNote?: string;
@@ -371,23 +375,35 @@ export const migrations: readonly Migration[] = [
       );
       create index outbox_unsent on mandate.outbox (id) where sent_at is null;`,
   },
+  {
+    // Reminders on time (ADR 0061): what each was last sent for, so a sweep sends each once.
+    id: '003_reminders',
+    sql: `
+      alter table mandate.intents add column brief_by date;
+      alter table mandate.intents add column rhythm text;
+      alter table mandate.intents add column reminded_brief_for text;
+      alter table mandate.intents add column reminded_rating_for text;
+      create index intents_waiting on mandate.intents (brief_by) where life = 'passed';
+      create index intents_under_way on mandate.intents (life) where life = 'active';`,
+  },
 ];
 
-const INTENT_COLUMNS = `id, parent_id, root_id, ancestors, workspace_id, floor_principal, floor_kind, floor_name, holder, holder_name, title, life, version, draft,
+export const INTENT_COLUMNS = `id, parent_id, root_id, ancestors, workspace_id, floor_principal, floor_kind, floor_name, holder, holder_name, title, life, version, draft,
   briefed_parent_version, main_effort, to_char(by_date, 'YYYY-MM-DD') as by_date, rhythm_days, rating, rating_note, rated_at, created_by, created_by_name,
-  passed_by, passed_by_name, passed_at, ended_at, ended_reason, created_at, updated_at`;
+  passed_by, passed_by_name, passed_at, ended_at, ended_reason, created_at, updated_at, to_char(brief_by, 'YYYY-MM-DD') as brief_by, rhythm`;
 
-type IntentRow = {
+export type IntentRow = {
   id: string; parent_id: string | null; root_id: string; ancestors: string[]; workspace_id: string; floor_principal: string; floor_kind: Intent['floorKind']; floor_name: string;
   holder: string; holder_name: string; title: string; life: Life; version: number; draft: Statement; briefed_parent_version: number | null; main_effort: boolean;
   by_date: string | null; rhythm_days: number; rating: Rating | null; rating_note: string | null; rated_at: Date | null; created_by: string; created_by_name: string;
   passed_by: string | null; passed_by_name: string | null; passed_at: Date | null; ended_at: Date | null; ended_reason: string | null; created_at: Date; updated_at: Date;
+  brief_by: string | null; rhythm: string | null;
 };
 
 const opt = <K extends string, V>(key: K, value: V | null | undefined) => (value === null || value === undefined ? {} : ({ [key]: value } as { [P in K]: V }));
 const iso = (d: Date | null) => d?.toISOString();
 
-const fromIntentRow = (r: IntentRow): Intent => ({
+export const fromIntentRow = (r: IntentRow): Intent => ({
   id: r.id,
   ...opt('parent', r.parent_id),
   root: r.root_id,
@@ -418,6 +434,8 @@ const fromIntentRow = (r: IntentRow): Intent => ({
   ...opt('endedReason', r.ended_reason),
   createdAt: r.created_at.toISOString(),
   updatedAt: r.updated_at.toISOString(),
+  ...opt('briefBy', r.brief_by),
+  ...opt('rhythm', r.rhythm),
 });
 
 export class PgMandateStore implements MandateStore {
@@ -534,16 +552,17 @@ export class PgMandateStore implements MandateStore {
         await client.query(
           `insert into mandate.intents (id, parent_id, root_id, ancestors, workspace_id, floor_principal, floor_kind, floor_name, holder, holder_name, title, life, version, draft,
              briefed_parent_version, main_effort, by_date, rhythm_days, rating, rating_note, rated_at, created_by, created_by_name, passed_by, passed_by_name, passed_at,
-             ended_at, ended_reason, created_at, updated_at)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
+             ended_at, ended_reason, created_at, updated_at, brief_by, rhythm)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
            on conflict (id) do update set holder = excluded.holder, holder_name = excluded.holder_name, title = excluded.title, life = excluded.life,
              version = excluded.version, draft = excluded.draft, briefed_parent_version = excluded.briefed_parent_version, main_effort = excluded.main_effort,
              by_date = excluded.by_date, rhythm_days = excluded.rhythm_days, rating = excluded.rating, rating_note = excluded.rating_note, rated_at = excluded.rated_at,
-             ended_at = excluded.ended_at, ended_reason = excluded.ended_reason, updated_at = excluded.updated_at`,
+             ended_at = excluded.ended_at, ended_reason = excluded.ended_reason, updated_at = excluded.updated_at, brief_by = excluded.brief_by, rhythm = excluded.rhythm`,
           [
             i.id, i.parent ?? null, i.root, i.ancestors, i.workspace, i.floor, i.floorKind, i.floorName, i.holder, i.holderName, i.title, i.life, i.version, JSON.stringify(i.draft),
             i.briefedParentVersion ?? null, i.mainEffort, i.byDate ?? null, i.rhythmDays, i.rating ?? null, i.ratingNote ?? null, i.ratedAt ?? null, i.createdBy, i.createdByName,
             i.passedBy ?? null, i.passedByName ?? null, i.passedAt ?? null, i.endedAt ?? null, i.endedReason ?? null, i.createdAt, i.updatedAt,
+            i.briefBy ?? null, i.rhythm ?? null,
           ],
         );
       for (const v of change.versions ?? []) {

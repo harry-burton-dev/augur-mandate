@@ -36,6 +36,7 @@ import { auditFromEnv, type Audit } from './audit.ts';
 import { backBriefKey, INBOX_KINDS, inboxFromEnv, type MandateInbox } from './inbox.ts';
 import { notifyFromEnv, type Notify } from './notices.ts';
 import { floorPrincipal, peopleFromEnv, type People } from './people.ts';
+import { RULE_MAX, ruleOf, ruleProblem, tidyRule } from './reminders/rules.ts';
 import { assessmentDue, ended, maySet, needsRecheck, rightsOn, sightOf, type Sight, type Viewer } from './rules.ts';
 import {
   ConflictError,
@@ -90,6 +91,7 @@ const summaryOf = (i: Intent, sight: Sight): Summary => ({
   version: i.version,
   mainEffort: i.mainEffort,
   ...(i.byDate ? { byDate: i.byDate } : {}),
+  ...(i.briefBy ? { briefBy: i.briefBy } : {}),
   ...(sight === 'full' && i.rating ? { rating: i.rating, ...(i.ratingNote ? { ratingNote: i.ratingNote } : {}), ...(i.ratedAt ? { ratedAt: i.ratedAt } : {}) } : {}),
   ...(sight === 'summary' && i.rating ? { rating: i.rating } : {}),
   sight,
@@ -162,6 +164,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
       // Saying it back is Mandate's own step: a concern is raised there, not by declining.
       allow: { decline: false, handOn: false, selfComplete: false },
       from,
+      ...(part.briefBy ? { due: part.briefBy } : {}),
       ...(reopen ? { reopen: true } : {}),
     };
   };
@@ -252,6 +255,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
       versions: versions.map((x) => ({ version: x.version, title: x.title, by: x.issuedByName, at: x.issuedAt })),
       passed: intent.passedBy ? { by: intent.passedByName, at: intent.passedAt } : undefined,
       rhythmDays: intent.rhythmDays,
+      rhythm: ruleOf(intent),
       ended: intent.endedAt ? { at: intent.endedAt, reason: intent.endedReason ?? '' } : undefined,
       lineOfSight: chain.map((a, n) => ({
         ...summaryOf(a, 'full'),
@@ -389,7 +393,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
               type: 'object',
               additionalProperties: false,
               minProperties: 1,
-              properties: { title: TITLE, statement: STATEMENT, byDate: { anyOf: [DATE, { type: 'null' }] }, rhythmDays: { type: 'integer', minimum: 1, maximum: 90 } },
+              properties: { title: TITLE, statement: STATEMENT, byDate: { anyOf: [DATE, { type: 'null' }] }, rhythmDays: { type: 'integer', minimum: 1, maximum: 90 }, rhythm: { anyOf: [{ type: 'null' }, TEXT(RULE_MAX)] } },
             },
           },
         },
@@ -399,6 +403,8 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
           const loaded = await load(v, req.params.id, reply);
           if (!loaded) return reply;
           if (!loaded.can.edit) return refuse(reply, 'Only whoever holds this intent can change it, while it’s a draft or under way.');
+          const rhythmProblem = req.body.rhythm ? ruleProblem(req.body.rhythm) : undefined;
+          if (rhythmProblem) return sendProblem(reply, 400, 'bad-rhythm', rhythmProblem);
           const { intent } = loaded;
           const next: Intent = {
             ...intent,
@@ -406,9 +412,11 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
             draft: req.body.statement ? tidy(req.body.statement, intent.draft) : intent.draft,
             ...(req.body.byDate !== undefined ? { byDate: req.body.byDate ?? undefined } : {}),
             ...(req.body.rhythmDays ? { rhythmDays: req.body.rhythmDays } : {}),
+            ...(req.body.rhythm ? { rhythm: tidyRule(req.body.rhythm) } : {}),
             updatedAt: stamp(),
           };
           if (req.body.byDate === null) delete next.byDate;
+          if (req.body.rhythm === null) delete next.rhythm;
           await store.commit({ intents: [next] });
           return detailOf(v, { ...loaded, intent: next, can: rightsOn(v, next, loaded.parent) });
         },
@@ -503,6 +511,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
                 title: TITLE,
                 purpose: TEXT(2000),
                 byDate: DATE,
+                briefBy: DATE,
                 carry: { type: 'object', additionalProperties: false, properties: { entities: { type: 'array', maxItems: 50, items: TEXT(300) }, documents: { type: 'array', maxItems: 50, items: TEXT(300) } } },
               },
             },
@@ -542,7 +551,9 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
             draft: { ...EMPTY_STATEMENT, purpose: (req.body.purpose ?? '').trim() },
             mainEffort: false,
             ...(req.body.byDate ? { byDate: req.body.byDate } : {}),
+            ...(req.body.briefBy ? { briefBy: req.body.briefBy } : {}),
             rhythmDays: intent.rhythmDays,
+            ...(intent.rhythm ? { rhythm: intent.rhythm } : {}),
             createdBy: v.id,
             createdByName: v.name,
             passedBy: v.id,

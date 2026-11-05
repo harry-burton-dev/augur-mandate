@@ -47,6 +47,16 @@
         "id": "back-brief",
         "label": "To say back",
         "icon": "compass"
+      },
+      {
+        "id": "late-back-brief",
+        "label": "Waiting for a back-brief",
+        "icon": "clock"
+      },
+      {
+        "id": "check-in",
+        "label": "How it’s going",
+        "icon": "gauge"
       }
     ]
   },
