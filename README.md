@@ -2,7 +2,7 @@
 
 Part of AUGUR, which is proprietary; see `LICENSE`.
 
-Intent, passed down floor by floor: the intent pillar app. It lives in its own repository and ships with AUGUR as a pillar app; AUGUR's guide to it is `docs/mandate.md` in the `im-platform` repository.
+Intent, passed down floor by floor: the intent pillar app. It lives in its own repository and ships with AUGUR as a pillar app; AUGUR's guide to it is `docs/mandate.md` in the `augur` repository.
 
 | Path | What it is |
 | --- | --- |
