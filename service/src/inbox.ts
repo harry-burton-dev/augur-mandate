@@ -15,7 +15,7 @@ export interface MandateInbox {
 }
 
 /** The kinds Mandate declares in its manifest's `inbox.kinds`. */
-export const INBOX_KINDS = { backBrief: 'back-brief', lateBackBrief: 'late-back-brief', checkIn: 'check-in', needsHolder: 'needs-holder' } as const;
+export const INBOX_KINDS = { backBrief: 'back-brief', lateBackBrief: 'late-back-brief', checkIn: 'check-in', needsHolder: 'needs-holder', concern: 'concern' } as const;
 
 /** The key of a part's back-brief item. */
 export const backBriefKey = (intent: string) => `back-brief/${intent}`;
@@ -23,6 +23,9 @@ export const backBriefKey = (intent: string) => `back-brief/${intent}`;
 export const lateBackBriefKey = (intent: string) => `late-back-brief/${intent}`;
 /** The key of an intent's "how is it going?" item. */
 export const checkInKey = (intent: string) => `check-in/${intent}`;
+
+/** The key of the giver's item when a part's concern has waited too long for an answer. */
+export const concernKey = (intent: string) => `concern/${intent}`;
 
 /** The key of the item that asks whoever passed a part down to pass it again, once its holder can't hold it. */
 export const needsHolderKey = (intent: string) => `needs-holder/${intent}`;

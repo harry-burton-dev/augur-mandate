@@ -1,8 +1,8 @@
 import type { InboxOwner, Jobs, NewInboxItem } from '@augur/service-kit';
-import { backBriefKey, checkInKey, INBOX_KINDS, lateBackBriefKey, type MandateInbox } from '../inbox.ts';
+import { backBriefKey, checkInKey, concernKey, INBOX_KINDS, lateBackBriefKey, type MandateInbox } from '../inbox.ts';
 import type { Intent } from '../store.ts';
-import { addDays, dayIn, daysBetween, nextAfter, ruleOf } from './rules.ts';
-import type { Reminder, ReminderStore } from './store.ts';
+import { addDays, addWorkingDays, dayIn, daysBetween, nextAfter, ruleOf } from './rules.ts';
+import type { OpenConcern, Reminder, ReminderStore } from './store.ts';
 
 /**
  * Reminders on time (ADR 0061, Mandate's MB3). Every 15 minutes a sweep finds what has come due and
@@ -10,15 +10,18 @@ import type { Reminder, ReminderStore } from './store.ts';
  *
  * - a part's back-brief due tomorrow: its holder's back-brief item says so;
  * - a back-brief late: its holder's item says so, and the giver gets an item of their own;
- * - an assessment due by the intent's rhythm: its holder gets "How is it going?".
+ * - an assessment due by the intent's rhythm: its holder gets "How is it going?";
+ * - a concern waiting two working days for its answer: whoever passed the part down gets an item.
  *
- * Each claims its row first (`reminded_brief_for`, `reminded_rating_for`), so it is sent once per due
- * date however many instances sweep. Items whose work is done are taken back on the next sweep.
+ * Each claims its row first (`reminded_brief_for`, `reminded_rating_for`, `reminded_concern_for`), so it
+ * is sent once per due date, or per concern, however many instances sweep. Items whose work is done are taken back on the next sweep.
  */
 
 export const REMINDER_JOB = 'reminders';
 /** Every 15 minutes. */
 export const REMINDER_CRON = '*/15 * * * *';
+/** How long a concern waits for its answer before whoever passed the part down is reminded (Mandate's spec, MB3). */
+export const CONCERN_WAIT_WORKING_DAYS = 2;
 
 /** The words the Inbox shows, in one place. */
 export const reminderWords = {
@@ -27,6 +30,7 @@ export const reminderWords = {
   giverLate: (i: Intent) => `${i.title} is waiting for its back-brief from ${i.holderName}.`,
   checkIn: (i: Intent, days: number | undefined) =>
     days === undefined ? `How is ${i.title} going? Nothing said yet.` : `How is ${i.title} going? Last said ${days === 1 ? 'a day' : `${days} days`} ago.`,
+  concern: (i: Intent, by: string) => `${by || i.holderName}’s concern on ${i.title} is waiting for your answer.`,
 };
 
 export interface SweepOptions {
@@ -54,6 +58,9 @@ const ownerOf = (i: Intent): InboxOwner => {
   const person = personOf(i.holder);
   return person ? { kind: 'person', id: person } : { kind: 'team', id: i.workspace, role: 'lead' };
 };
+
+/** Who answers a part's concern: whoever passed it down, else whoever holds the intent above it. */
+const answererOf = ({ intent: i, parent }: OpenConcern): InboxOwner | undefined => (i.passedBy ? { kind: 'person', id: i.passedBy } : parent ? ownerOf(parent) : undefined);
 
 export const sweepReminders = async ({ store, inbox, zone: zoneOf, app, now = () => new Date(), log }: SweepOptions): Promise<SweepResult> => {
   const at = now();
@@ -149,6 +156,38 @@ export const sweepReminders = async ({ store, inbox, zone: zoneOf, app, now = ()
     if (i.life === 'active' && !said) continue;
     if (!(await store.claim('rating', i.id, `closed:${due}`))) continue;
     await inbox.close(checkInKey(i.id), i.life === 'active' || i.life === 'achieved' ? 'done' : 'withdrawn').catch((err: Error) => log?.error({ err: err.message, intent: i.id }, 'could not take back a reminder'));
+    result.closed++;
+  }
+
+  // Concerns waiting two working days for an answer, each once. Answered or ended: taken back.
+  const concerns = await store.openConcerns();
+  const concernWas = await store.reminded('concern', concerns.map((c) => c.intent.id));
+  for (const c of concerns) {
+    const { intent: i, concern } = c;
+    const due = addWorkingDays(dayIn(zone, new Date(concern.at)), CONCERN_WAIT_WORKING_DAYS);
+    const owner = answererOf(c);
+    if (due > today || !owner || (owner.kind === 'person' && owner.id === personOf(i.holder))) continue;
+    await once('concern', i, `sent:${concern.id}`, concernWas.get(i.id), () =>
+      inbox.put(concernKey(i.id), c.parent?.workspace ?? i.workspace, {
+        kind: INBOX_KINDS.concern,
+        owner,
+        title: i.title,
+        detail: reminderWords.concern(i, concern.byName),
+        subject: subject(i),
+        path: `/intents/${i.id}#discussion`,
+        due,
+        // Answering it, or changing what was passed, is Mandate's own step; the item closes itself once they do.
+        allow: { decline: false, handOn: false, selfComplete: false },
+        reopen: true,
+      }),
+    );
+  }
+  const stillOpen = new Map(concerns.map((c) => [c.intent.id, c.concern.id]));
+  for (const { intent: i, value } of await store.remindedWith('concern', 'sent:')) {
+    const concern = value.slice('sent:'.length);
+    if (stillOpen.get(i.id) === concern) continue;
+    if (!(await store.claim('concern', i.id, `closed:${concern}`))) continue;
+    await inbox.close(concernKey(i.id), i.life === 'passed' || i.life === 'active' ? 'done' : 'withdrawn').catch((err: Error) => log?.error({ err: err.message, intent: i.id }, 'could not take back a reminder'));
     result.closed++;
   }
 

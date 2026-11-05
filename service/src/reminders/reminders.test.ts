@@ -5,7 +5,7 @@ import { buildApp } from '../app.ts';
 import type { MandateInbox } from '../inbox.ts';
 import type { People } from '../people.ts';
 import { MemoryMandateStore, PgMandateStore, type MandateStore } from '../store.ts';
-import { addDays, dayIn, nextAfter, ruleOf, ruleProblem } from './rules.ts';
+import { addDays, addWorkingDays, dayIn, nextAfter, ruleOf, ruleProblem } from './rules.ts';
 import { MemoryReminderStore, PgReminderStore, type ReminderStore } from './store.ts';
 import { sweepReminders } from './sweep.ts';
 
@@ -194,6 +194,37 @@ const reminds = (make: () => Promise<{ store: MandateStore; reminders: ReminderS
     expect(t.inbox.get(`back-brief/${part.id}`)?.changes).toHaveLength(1);
   });
 
+  it('reminds whoever passed a part down of a concern waiting two working days, once, and takes it back once answered', async () => {
+    const { part } = await alpha(t);
+    // Raised on Thursday 29 October: two working days on is Monday 2 November, past the weekend.
+    t.at('2026-10-29T16:00:00Z');
+    const raised = await t.call(engLead, 'POST', `/intents/${part.id}/back-brief`, { words: 'Keep Halcyon at sea.', concern: 'Halcyon is due in dock on the 3rd.', outcome: 'concern' });
+    expect(raised.status).toBe(200);
+    await t.sweep('2026-10-31T09:00:00Z');
+    expect(t.inbox.has(`concern/${part.id}`)).toBe(false);
+    await t.sweep('2026-11-02T08:00:00Z');
+    expect(t.inbox.get(`concern/${part.id}`)).toMatchObject({
+      workspace: ORG,
+      state: 'open',
+      item: { kind: 'concern', owner: { kind: 'person', id: 'okafor' }, detail: 'Dana Ross’s concern on Keep Halcyon at sea is waiting for your answer.', due: '2026-11-02', path: `/intents/${part.id}#discussion` },
+    });
+    const sent = await t.sweep('2026-11-02T08:15:00Z');
+    expect(sent.sent).toBe(0);
+
+    t.at('2026-11-02T10:00:00Z');
+    const ref = { kind: 'ref', app: 'mandate', type: 'intent', id: part.id };
+    expect((await t.call(orgLead, 'POST', '/threads/messages', { ref, kind: 'answer', words: 'Dock her on the 10th instead.' })).status).toBe(201);
+    expect((await t.sweep('2026-11-02T10:15:00Z')).closed).toBe(1);
+    expect(t.inbox.get(`concern/${part.id}`)?.state).toBe('done');
+    expect((await t.sweep('2026-11-02T10:30:00Z')).closed).toBe(0);
+  });
+
+  it('counts working days, Monday to Friday, in the organisation’s days', () => {
+    expect(addWorkingDays('2026-10-29', 2)).toBe('2026-11-02');
+    expect(addWorkingDays('2026-10-31', 2)).toBe('2026-11-03');
+    expect(addWorkingDays('2026-11-02', 2)).toBe('2026-11-04');
+  });
+
   it('reminds nobody about a part someone holds for themselves when they passed it', async () => {
     const op = (await t.call(orgLead, 'POST', '/intents', { title: 'Own work' })).body;
     await t.call(orgLead, 'PATCH', `/intents/${op.id}`, { statement: { purpose: 'p', endState: 'e' } });
@@ -235,7 +266,7 @@ describe.runIf(process.env.DATABASE_URL)('reminders on Postgres', () => {
     await admin.end();
   });
   reminds(async () => {
-    await db.query('truncate mandate.outbox, mandate.entity_bindings, mandate.document_bindings, mandate.assessments, mandate.back_briefs, mandate.versions, mandate.intents');
+    await db.query('truncate mandate.messages, mandate.outbox, mandate.entity_bindings, mandate.document_bindings, mandate.assessments, mandate.back_briefs, mandate.versions, mandate.intents');
     return { store, reminders };
   });
 });

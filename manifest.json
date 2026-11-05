@@ -63,6 +63,11 @@
         "id": "needs-holder",
         "label": "To pass again",
         "icon": "person"
+      },
+      {
+        "id": "concern",
+        "label": "Concerns to answer",
+        "icon": "mail"
       }
     ]
   },
