@@ -39,6 +39,7 @@
     "people:read",
     "notifications:send",
     "events:publish",
+    "events:subscribe",
     "inbox:write"
   ],
   "inbox": {
@@ -47,6 +48,11 @@
         "id": "back-brief",
         "label": "To say back",
         "icon": "compass"
+      },
+      {
+        "id": "needs-holder",
+        "label": "To pass again",
+        "icon": "person"
       }
     ]
   },

@@ -53,6 +53,7 @@ import {
   type EntityRef,
   type FloorItem,
   MandateApi,
+  type NeedsHolder,
   type Rating,
   type Statement,
   type Summary,
@@ -60,7 +61,8 @@ import {
 } from './api.js';
 
 /** How a summary's state reads, as a mark and a word: where it is in its life, else how its holder judges it. */
-export const markOf = (i: Pick<Summary, 'life' | 'rating'>): { status: StatusName; label: string } => {
+export const markOf = (i: Pick<Summary, 'life' | 'rating' | 'needsHolder'>): { status: StatusName; label: string } => {
+  if (i.needsHolder) return { status: 'needs', label: 'Needs a holder' };
   switch (i.life) {
     case 'draft':
       return { status: 'paused', label: 'Draft' };
@@ -85,6 +87,13 @@ export const markOf = (i: Pick<Summary, 'life' | 'rating'>): { status: StatusNam
     default:
       return { status: 'queued', label: 'Under way' };
   }
+};
+
+/** Why a part has nobody to hold it, in words, before when it happened. */
+const NEEDS_HOLDER: Record<NeedsHolder['why'], (name: string) => string> = {
+  disabled: (name) => `${name || 'Its holder'} no longer holds this: their sign-in was turned off`,
+  left: (name) => `${name || 'Its holder'} no longer holds this: they left`,
+  removed: (name) => `${name || 'Its holder'} no longer holds this: they left the team`,
 };
 
 /** Who holds it, in words. */
@@ -148,7 +157,7 @@ const ROLE_OPTIONS: SelectOption[] = Object.entries(ROLE_WORDS).map(([value, lab
   }[value],
 }));
 
-type DialogName = 'new' | 'edit' | 'pass' | 'accept' | 'concern' | 'assess' | 'achieve' | 'withdraw' | 'role';
+type DialogName = 'new' | 'edit' | 'pass' | 'pass-again' | 'accept' | 'concern' | 'assess' | 'achieve' | 'withdraw' | 'role';
 
 /** Where Mandate is: a floor's list, what you hold, or one intent. */
 type Where = { view: 'floor' } | { view: 'yours' } | { view: 'intent'; id: string };
@@ -441,6 +450,7 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
     const { intent, can } = d;
     const acts: (PageAction & { run: () => void })[] = [];
     const add = (id: string, label: string, kind: ButtonKind, run: () => void) => acts.push({ id, label, kind, run });
+    if (can.passAgain) add('pass-again', 'Pass it again', 'primary', () => void openPass('pass-again'));
     if (can.backBrief && intent.life === 'passed') {
       add('back-brief', 'Back-brief', 'primary', () => setDialog('accept'));
       add('concern', 'Raise a concern', 'secondary', () => setDialog('concern'));
@@ -460,13 +470,17 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
   const attention = (d: Detail) => {
     const { intent, can } = d;
     let words = '';
-    if (can.backBrief && intent.life === 'passed') words = `${d.passed?.by ?? 'Someone'} passed you this. Read the line of sight, then say it back in your own words to accept it.`;
+    if (intent.needsHolder)
+      words = `${NEEDS_HOLDER[intent.needsHolder.why](intent.holderName)} ${relativeTime(intent.needsHolder.since)}. ${
+        can.passAgain ? 'Pass it to someone else, or withdraw it.' : `${d.passed?.by ?? 'Whoever passed it down'} passes it again.`
+      }`;
+    else if (can.backBrief && intent.life === 'passed') words = `${d.passed?.by ?? 'Someone'} passed you this. Read the line of sight, then say it back in your own words to accept it.`;
     else if (can.backBrief && d.recheck) words = `${d.lineOfSight.at(-1)?.title ?? 'The intent above'} has changed since you back-briefed. Check yours still fits.`;
     else if (can.edit && intent.life === 'draft') words = 'A draft: say its purpose and end state, then issue it.';
     else if (can.edit && unissued(d)) words = 'You’ve changed it since it was last issued. Issue it to make it the next version.';
     else if (d.assessmentDue) words = 'How is it going? Your last judgement is older than its rhythm.';
     else if (d.ended) words = `${markOf(intent).label} ${relativeTime(d.ended.at)}.${d.ended.reason ? ` ${d.ended.reason}` : ''}`;
-    const needs = (can.backBrief && (intent.life === 'passed' || d.recheck)) || d.assessmentDue;
+    const needs = can.passAgain || (can.backBrief && (intent.life === 'passed' || d.recheck)) || d.assessmentDue;
     return words ? <Notice tone={needs ? 'needs' : 'info'}>{words}</Notice> : null;
   };
 
@@ -495,20 +509,23 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
     }
   };
 
-  const findTargets = async (q: string) => {
+  /** Who a part can go to: from this intent when passing down, from the one above when passing it again. */
+  const findTargets = async (q: string, again = dialog === 'pass-again') => {
     if (!detail) return;
+    const from = again ? detail.lineOfSight.at(-1)?.id : detail.intent.id;
+    if (!from) return;
     try {
-      const found = await api.targets(detail.intent.id, q);
+      const found = await api.targets(from, q);
       setTargets([...found.teams, ...found.people]);
     } catch (err) {
       setNote((err as Error).message);
     }
   };
-  const openPass = async () => {
+  const openPass = async (which: 'pass' | 'pass-again' = 'pass') => {
     setTargets([]);
     setCarry([]);
-    setDialog('pass');
-    await findTargets('');
+    setDialog(which);
+    await findTargets('', which === 'pass-again');
   };
 
   const intentView = () => {
@@ -599,6 +616,8 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
                 <Refs
                   refs={g.items.map((e) => ({
                     ...e.entity,
+                    // Retired in Data Atlas: still bound until whoever holds it unbinds it, and says so.
+                    ...(e.state === 'retired' ? { label: `${e.entity.label || 'An entity'} (retired in Data Atlas)` } : {}),
                     ...(e.from ? { from: e.from } : {}),
                   }))}
                   onOpen={(ref) => void openEntity(ctx, g.items.find((e) => e.entity.id === ref.id)!.entity)}
@@ -681,6 +700,9 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
       },
     };
     await change(() => api.pass(d.intent.id, part), 'Passed down. It’s under way once they back-brief it.');
+  };
+  const submitPassAgain: DialogSubmit = async (values) => {
+    await change(() => api.passAgain(detail!.intent.id, values.to ?? ''), 'Passed again. It’s under way once they back-brief it.');
   };
   const submitAccept: DialogSubmit = async (values) => {
     await change(
@@ -832,6 +854,33 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
           />
         );
       }
+      case 'pass-again':
+        return d ? (
+          <Dialog
+            open
+            onClose={close}
+            eyebrow={`Part of ${d.lineOfSight.at(-1)?.title ?? 'the intent above'}`}
+            heading={`Who holds “${d.intent.title}” now?`}
+            summary="A team directly below the floor above, or someone on it. It keeps its statement and what it’s bound to, and they say it back before it’s under way."
+            actionLabel="Pass it again"
+            busyLabel="Passing…"
+            onSubmit={submitPassAgain}
+            fields={
+              <>
+                <TextField label="Find a team or person" optional maxLength={100} onChange={(v) => void findTargets(v, true)} />
+                <Select
+                  name="to"
+                  label="To"
+                  required
+                  placeholder="Choose who"
+                  options={targets
+                    .filter((t) => t.to !== d.intent.holder)
+                    .map((t) => ({ value: t.to, label: t.you ? `${t.name} (you)` : t.name, detail: t.to.startsWith('team:') ? 'Team' : (t.email ?? '') }))}
+                />
+              </>
+            }
+          />
+        ) : null;
       case 'accept':
         return d ? (
           <Dialog

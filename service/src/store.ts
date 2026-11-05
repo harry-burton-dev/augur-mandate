@@ -67,6 +67,8 @@ export interface Intent {
   passedAt?: string;
   endedAt?: string;
   endedReason?: string;
+  /** Its holder no longer can (MB1). The holder is kept, so the page can say who held it. */
+  needsHolder?: Wire.NeedsHolder;
   createdAt: string;
   updatedAt: string;
 }
@@ -101,10 +103,20 @@ export interface EntityRef extends Omit<Wire.EntityRef, 'label' | 'at'> {
 /** A document, as apps pass them (the SDK's DocumentRef). */
 export type DocumentRef = Wire.DocumentRef;
 
+/**
+ * How a binding's entity stands in Data Atlas. `merged`: the entity was merged into another that this
+ * intent was already bound to in the same role, so the row is kept, out of sight, in case the merge is undone.
+ */
+export type BindingState = Wire.EntityState | 'merged';
+
 export interface EntityBinding {
   intent: string;
   entity: EntityRef;
   role: string;
+  /** Active unless Data Atlas said otherwise. */
+  state?: Exclude<BindingState, 'active'>;
+  /** The entity it pointed at before Data Atlas merged that one into this one. */
+  mergedFrom?: string;
   /** The ancestor it was carried down from, when it was. */
   inheritedFrom?: string;
   boundBy: string;
@@ -130,6 +142,7 @@ export const TOPICS = {
   superseded: 'mandate.intent.superseded',
   entityBound: 'mandate.intent.entity-bound',
   entityUnbound: 'mandate.intent.entity-unbound',
+  needsHolder: 'mandate.intent.needs-holder',
 } as const;
 
 export interface OutboxEvent {
@@ -151,6 +164,10 @@ export interface Change {
   documentBindings?: DocumentBinding[];
   unbindEntities?: { intent: string; entity: string; role: string }[];
   unbindDocuments?: { intent: string; app: string; id: string }[];
+  /** Data Atlas changed how an entity stands: every binding of it, in any role, takes the state. */
+  entityStates?: { entity: string; state: 'active' | 'retired' }[];
+  /** One binding's state, as a merge leaves or a split restores it. */
+  bindingStates?: { intent: string; entity: string; role: string; state: BindingState }[];
   events?: OutboxEvent[];
 }
 
@@ -173,9 +190,14 @@ export interface MandateStore {
   assessments(intent: string, limit?: number): Promise<Assessment[]>;
   entityBindings(intents: readonly string[]): Promise<EntityBinding[]>;
   documentBindings(intents: readonly string[]): Promise<DocumentBinding[]>;
-  /** The bindings of one entity: what Data Atlas shows as "used by". */
-  boundTo(entity: string): Promise<EntityBinding[]>;
+  /** The bindings of one entity: what Data Atlas shows as "used by". With `hidden`, the merged-away rows too. */
+  boundTo(entity: string, hidden?: boolean): Promise<EntityBinding[]>;
+  /** The bindings a merge moved here from this entity. */
+  mergedFrom(entity: string): Promise<EntityBinding[]>;
   commit(change: Change): Promise<void>;
+  /** The last platform event Mandate has handled, so following picks up where it left off. */
+  cursor(): Promise<string | undefined>;
+  saveCursor(seq: string): Promise<void>;
 }
 
 export const newId = () => randomUUID();
@@ -191,6 +213,7 @@ export class MemoryMandateStore implements MandateStore {
   entityRows: EntityBinding[] = [];
   documentRows: DocumentBinding[] = [];
   readonly outbox: OutboxEvent[] = [];
+  seq: string | undefined;
 
   async intent(id: string) {
     const row = this.rows.get(id);
@@ -226,13 +249,22 @@ export class MemoryMandateStore implements MandateStore {
     return this.assessmentRows.filter((a) => a.intent === intent).reverse().slice(0, limit);
   }
   async entityBindings(intents: readonly string[]) {
-    return this.entityRows.filter((b) => intents.includes(b.intent));
+    return this.entityRows.filter((b) => intents.includes(b.intent) && b.state !== 'merged').map((b) => structuredClone(b));
   }
   async documentBindings(intents: readonly string[]) {
     return this.documentRows.filter((b) => intents.includes(b.intent));
   }
-  async boundTo(entity: string) {
-    return this.entityRows.filter((b) => b.entity.id === entity);
+  async boundTo(entity: string, hidden = false) {
+    return this.entityRows.filter((b) => b.entity.id === entity && (hidden || b.state !== 'merged')).map((b) => structuredClone(b));
+  }
+  async mergedFrom(entity: string) {
+    return this.entityRows.filter((b) => b.mergedFrom === entity).map((b) => structuredClone(b));
+  }
+  async cursor() {
+    return this.seq;
+  }
+  async saveCursor(seq: string) {
+    this.seq = seq;
   }
   async commit(change: Change) {
     for (const v of change.versions ?? []) if (this.versionRows.some((r) => r.intent === v.intent && r.version === v.version)) throw new ConflictError('That version was issued already.');
@@ -246,6 +278,12 @@ export class MemoryMandateStore implements MandateStore {
       this.entityRows = this.entityRows.filter((r) => !(r.intent === b.intent && r.entity.id === b.entity.id && r.role === b.role));
       this.entityRows.push(b);
     }
+    const stateOf = (state: BindingState) => (state === 'active' ? undefined : state);
+    for (const e of change.entityStates ?? [])
+      for (const b of this.entityRows) if (b.entity.id === e.entity && b.state !== 'merged') b.state = stateOf(e.state) as EntityBinding['state'];
+    for (const u of change.bindingStates ?? [])
+      for (const b of this.entityRows) if (b.intent === u.intent && b.entity.id === u.entity && b.role === u.role) b.state = stateOf(u.state) as EntityBinding['state'];
+    for (const b of this.entityRows) if (!b.state) delete b.state;
     for (const b of change.documentBindings ?? []) {
       this.documentRows = this.documentRows.filter((r) => !(r.intent === b.intent && r.document.app === b.document.app && r.document.id === b.document.id));
       this.documentRows.push(b);
@@ -371,17 +409,29 @@ export const migrations: readonly Migration[] = [
       );
       create index outbox_unsent on mandate.outbox (id) where sent_at is null;`,
   },
+  {
+    // Following the platform and Data Atlas (MB1): holders who leave, retired and merged entities, where it left off.
+    id: '002_following',
+    sql: `
+      alter table mandate.intents add column needs_holder text;
+      alter table mandate.intents add column needs_holder_since timestamptz;
+      alter table mandate.entity_bindings add column entity_state text not null default 'active' check (entity_state in ('active', 'retired', 'merged'));
+      alter table mandate.entity_bindings add column merged_from text;
+      create index entity_bindings_merged_from on mandate.entity_bindings (merged_from) where merged_from is not null;
+      create table mandate.event_cursor (id integer primary key check (id = 1), seq text not null);`,
+  },
 ];
 
 const INTENT_COLUMNS = `id, parent_id, root_id, ancestors, workspace_id, floor_principal, floor_kind, floor_name, holder, holder_name, title, life, version, draft,
   briefed_parent_version, main_effort, to_char(by_date, 'YYYY-MM-DD') as by_date, rhythm_days, rating, rating_note, rated_at, created_by, created_by_name,
-  passed_by, passed_by_name, passed_at, ended_at, ended_reason, created_at, updated_at`;
+  passed_by, passed_by_name, passed_at, ended_at, ended_reason, needs_holder, needs_holder_since, created_at, updated_at`;
 
 type IntentRow = {
   id: string; parent_id: string | null; root_id: string; ancestors: string[]; workspace_id: string; floor_principal: string; floor_kind: Intent['floorKind']; floor_name: string;
   holder: string; holder_name: string; title: string; life: Life; version: number; draft: Statement; briefed_parent_version: number | null; main_effort: boolean;
   by_date: string | null; rhythm_days: number; rating: Rating | null; rating_note: string | null; rated_at: Date | null; created_by: string; created_by_name: string;
-  passed_by: string | null; passed_by_name: string | null; passed_at: Date | null; ended_at: Date | null; ended_reason: string | null; created_at: Date; updated_at: Date;
+  passed_by: string | null; passed_by_name: string | null; passed_at: Date | null; ended_at: Date | null; ended_reason: string | null;
+  needs_holder: Wire.NeedsHolder['why'] | null; needs_holder_since: Date | null; created_at: Date; updated_at: Date;
 };
 
 const opt = <K extends string, V>(key: K, value: V | null | undefined) => (value === null || value === undefined ? {} : ({ [key]: value } as { [P in K]: V }));
@@ -416,6 +466,7 @@ const fromIntentRow = (r: IntentRow): Intent => ({
   ...opt('passedAt', iso(r.passed_at)),
   ...opt('endedAt', iso(r.ended_at)),
   ...opt('endedReason', r.ended_reason),
+  ...(r.needs_holder ? { needsHolder: { why: r.needs_holder, since: (r.needs_holder_since ?? r.updated_at).toISOString() } } : {}),
   createdAt: r.created_at.toISOString(),
   updatedAt: r.updated_at.toISOString(),
 });
@@ -497,19 +548,35 @@ export class PgMandateStore implements MandateStore {
     entity: { kind: 'entity', id: r.entity_id, type: r.entity_type, label: r.label_cache },
     role: r.role,
     ...opt('inheritedFrom', r.inherited_from as string | null),
+    ...(r.entity_state && r.entity_state !== 'active' ? { state: r.entity_state as EntityBinding['state'] } : {}),
+    ...opt('mergedFrom', r.merged_from as string | null),
     boundBy: r.bound_by,
     at: r.at.toISOString(),
   });
 
   async entityBindings(intents: readonly string[]) {
     if (!intents.length) return [];
-    const { rows } = await this.pool.query('select * from mandate.entity_bindings where intent_id = any($1::text[]) order by at, entity_id', [intents]);
+    const { rows } = await this.pool.query("select * from mandate.entity_bindings where intent_id = any($1::text[]) and entity_state <> 'merged' order by at, entity_id", [intents]);
     return rows.map(PgMandateStore.entityRow);
   }
 
-  async boundTo(entity: string) {
-    const { rows } = await this.pool.query('select * from mandate.entity_bindings where entity_id = $1 order by at', [entity]);
+  async boundTo(entity: string, hidden = false) {
+    const { rows } = await this.pool.query(`select * from mandate.entity_bindings where entity_id = $1 ${hidden ? '' : "and entity_state <> 'merged'"} order by at`, [entity]);
     return rows.map(PgMandateStore.entityRow);
+  }
+
+  async mergedFrom(entity: string) {
+    const { rows } = await this.pool.query('select * from mandate.entity_bindings where merged_from = $1 order by at', [entity]);
+    return rows.map(PgMandateStore.entityRow);
+  }
+
+  async cursor() {
+    const { rows } = await this.pool.query<{ seq: string }>('select seq from mandate.event_cursor where id = 1');
+    return rows[0]?.seq;
+  }
+
+  async saveCursor(seq: string) {
+    await this.pool.query('insert into mandate.event_cursor (id, seq) values (1, $1) on conflict (id) do update set seq = excluded.seq', [seq]);
   }
 
   async documentBindings(intents: readonly string[]) {
@@ -534,9 +601,10 @@ export class PgMandateStore implements MandateStore {
         await client.query(
           `insert into mandate.intents (id, parent_id, root_id, ancestors, workspace_id, floor_principal, floor_kind, floor_name, holder, holder_name, title, life, version, draft,
              briefed_parent_version, main_effort, by_date, rhythm_days, rating, rating_note, rated_at, created_by, created_by_name, passed_by, passed_by_name, passed_at,
-             ended_at, ended_reason, created_at, updated_at)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
-           on conflict (id) do update set holder = excluded.holder, holder_name = excluded.holder_name, title = excluded.title, life = excluded.life,
+             ended_at, ended_reason, created_at, updated_at, needs_holder, needs_holder_since)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+           on conflict (id) do update set floor_name = excluded.floor_name, needs_holder = excluded.needs_holder, needs_holder_since = excluded.needs_holder_since,
+             passed_by = excluded.passed_by, passed_by_name = excluded.passed_by_name, passed_at = excluded.passed_at, holder = excluded.holder, holder_name = excluded.holder_name, title = excluded.title, life = excluded.life,
              version = excluded.version, draft = excluded.draft, briefed_parent_version = excluded.briefed_parent_version, main_effort = excluded.main_effort,
              by_date = excluded.by_date, rhythm_days = excluded.rhythm_days, rating = excluded.rating, rating_note = excluded.rating_note, rated_at = excluded.rated_at,
              ended_at = excluded.ended_at, ended_reason = excluded.ended_reason, updated_at = excluded.updated_at`,
@@ -544,6 +612,7 @@ export class PgMandateStore implements MandateStore {
             i.id, i.parent ?? null, i.root, i.ancestors, i.workspace, i.floor, i.floorKind, i.floorName, i.holder, i.holderName, i.title, i.life, i.version, JSON.stringify(i.draft),
             i.briefedParentVersion ?? null, i.mainEffort, i.byDate ?? null, i.rhythmDays, i.rating ?? null, i.ratingNote ?? null, i.ratedAt ?? null, i.createdBy, i.createdByName,
             i.passedBy ?? null, i.passedByName ?? null, i.passedAt ?? null, i.endedAt ?? null, i.endedReason ?? null, i.createdAt, i.updatedAt,
+            i.needsHolder?.why ?? null, i.needsHolder?.since ?? null,
           ],
         );
       for (const v of change.versions ?? []) {
@@ -566,10 +635,14 @@ export class PgMandateStore implements MandateStore {
         await client.query('delete from mandate.document_bindings where intent_id = $1 and app = $2 and document_id = $3', [u.intent, u.app, u.id]);
       for (const b of change.entityBindings ?? [])
         await client.query(
-          `insert into mandate.entity_bindings (intent_id, entity_id, entity_type, label_cache, role, inherited_from, bound_by, at) values ($1,$2,$3,$4,$5,$6,$7,$8)
+          `insert into mandate.entity_bindings (intent_id, entity_id, entity_type, label_cache, role, inherited_from, bound_by, at, entity_state, merged_from) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
            on conflict (intent_id, entity_id, role) do update set entity_type = excluded.entity_type, label_cache = excluded.label_cache`,
-          [b.intent, b.entity.id, b.entity.type, b.entity.label, b.role, b.inheritedFrom ?? null, b.boundBy, b.at],
+          [b.intent, b.entity.id, b.entity.type, b.entity.label, b.role, b.inheritedFrom ?? null, b.boundBy, b.at, b.state ?? 'active', b.mergedFrom ?? null],
         );
+      for (const e of change.entityStates ?? [])
+        await client.query("update mandate.entity_bindings set entity_state = $2 where entity_id = $1 and entity_state <> 'merged'", [e.entity, e.state]);
+      for (const u of change.bindingStates ?? [])
+        await client.query('update mandate.entity_bindings set entity_state = $4 where intent_id = $1 and entity_id = $2 and role = $3', [u.intent, u.entity, u.role, u.state]);
       for (const b of change.documentBindings ?? [])
         await client.query(
           `insert into mandate.document_bindings (intent_id, app, document_id, title_cache, document_version, inherited_from, bound_by, at) values ($1,$2,$3,$4,$5,$6,$7,$8)
