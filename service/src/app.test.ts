@@ -5,7 +5,7 @@ import { buildApp } from './app.ts';
 import { ATLAS_TOPICS, makeFollower } from './follow.ts';
 import type { MandateNotice } from './notices.ts';
 import type { People } from './people.ts';
-import { MemoryMandateStore, PgMandateStore, TOPICS, type MandateStore, type OutboxEvent } from './store.ts';
+import { PgMandateStore, TOPICS, type MandateStore, type OutboxEvent } from './store.ts';
 
 // Northwind: the org, with Engineering and Logistics below it, and Hull (a team inside Engineering).
 const ORG = 'w-org';
@@ -94,7 +94,7 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
 
   it('believes only the caller the gateway signed for it, and needs a floor', async () => {
     const gateway = callerSigner();
-    const app = await buildApp({ callers: callerCheckFor(gateway, 'mandate'), people });
+    const app = await buildApp({ store: t.store, callers: callerCheckFor(gateway, 'mandate'), people });
     const sam = { id: 'sam', name: 'Sam Patel', departments: [], roles: [], workspace: { id: 'w-sam', kind: 'personal' as const, role: 'lead' as const } };
     expect((await app.inject({ remoteAddress: '172.18.0.9', method: 'GET', url: '/v1/floor', headers: await signedCallerHeaders(gateway, sam, 'mandate') })).statusCode).toBe(200);
     expect((await app.inject({ remoteAddress: '172.18.0.9', method: 'GET', url: '/v1/floor', headers: callerHeaders(sam) })).statusCode).toBe(401);
@@ -463,12 +463,6 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect(names.refs).toEqual([{ id: op.id, label: 'Operation Alpha', canOpen: true }, { id: log.id, label: 'Stock Port Ardel', canOpen: false }, { id: 'nope', canOpen: false }]);
   });
 };
-
-describe('mandate', () =>
-  behaves(async () => {
-    const store = new MemoryMandateStore();
-    return { store, outbox: async () => store.outbox };
-  }));
 
 // Runs wherever DATABASE_URL points at a Postgres; CI starts one for it.
 describe.runIf(process.env.DATABASE_URL)('mandate on Postgres', () => {
