@@ -24,12 +24,16 @@ import type {
   Floor,
   HomeGlance,
   MainEffortBody,
+  Message as WireMessage,
+  MessageBody,
   PassAgainBody,
   PassBody,
   Rights,
+  RevisePartBody,
   SearchResults,
   Summary,
   Targets,
+  Thread,
   WithdrawBody,
   Yours,
 } from './api-types.ts';
@@ -38,7 +42,7 @@ import { bindingOutbox } from './follow.ts';
 import { backBriefKey, INBOX_KINDS, inboxFromEnv, needsHolderKey, type MandateInbox } from './inbox.ts';
 import { notifyFromEnv, type Notify } from './notices.ts';
 import { floorPrincipal, peopleFromEnv, type People } from './people.ts';
-import { assessmentDue, ended, maySet, needsRecheck, rightsOn, sightOf, type Sight, type Viewer } from './rules.ts';
+import { amongHolders, assessmentDue, discussing, ended, maySet, needsRecheck, rightsOn, sightOf, type Sight, type Viewer } from './rules.ts';
 import {
   ConflictError,
   EMPTY_STATEMENT,
@@ -52,6 +56,7 @@ import {
   type EntityBinding,
   type Intent,
   type MandateStore,
+  type Message,
   type OutboxEvent,
   type Statement,
 } from './store.ts';
@@ -223,6 +228,13 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
 
   const stamp = () => now().toISOString();
   const event = (topic: string, i: Intent, payload: Record<string, unknown> = {}): OutboxEvent => ({ topic, workspace: i.workspace, payload: { intent: i.id, ...payload } });
+  /** The concern still waiting for an answer: the latest one, unless an answer came after it. */
+  const openConcern = (messages: readonly Message[]) => {
+    const n = messages.map((m) => m.kind).lastIndexOf('concern');
+    return n >= 0 && !messages.slice(n + 1).some((m) => m.kind === 'answer') ? messages[n] : undefined;
+  };
+  const shown = ({ id, kind, words, byName, at, answers }: Message): WireMessage => ({ id, kind, words, byName, at, ...(answers ? { answers } : {}) });
+
   /** A binding made or taken away, told in ADR 0066's shape. */
   const bindingTold = (i: Intent, entity: string, role: string, change: 'bound' | 'unbound') => bindingOutbox(manifest.id, { intent: i.id, entity, role }, change, i.workspace);
 
@@ -675,10 +687,13 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
             ...(accepted ? { life: intent.life === 'passed' ? 'active' : intent.life, briefedParentVersion: parent?.version ?? 0 } : {}),
             updatedAt: at,
           };
+          // A concern is also the discussion's first word on it, so the discussion is the one place to read it.
+          const message: Message | undefined = accepted ? undefined : { id: newId(), intent: intent.id, kind: 'concern', words: concern, by: v.id, byName: v.name, at };
           await store.commit({
             intents: [next],
             backBriefs: [{ id: newId(), intent: intent.id, version: intent.version, parentVersion: parent?.version ?? 0, by: v.id, byName: v.name, words: req.body.words.trim(), concern, outcome: req.body.outcome, at }],
-            events: accepted ? [event(TOPICS.accepted, intent, { version: intent.version })] : [],
+            ...(message ? { messages: [message] } : {}),
+            events: accepted ? [event(TOPICS.accepted, intent, { version: intent.version })] : [event(TOPICS.discussed, intent, { message: message!.id, kind: 'concern' })],
           });
           await recorded({ actor: v.id, action: accepted ? 'intent.accepted' : 'intent.concern-raised', target: intent.id, workspace: intent.workspace, detail: { title: intent.title } });
           // Said back: the work is done. A concern leaves it waiting, for the answer and another try.
@@ -692,6 +707,139 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
             link: `/intents/${intent.id}`,
           });
           return detailOf(v, { ...loaded, intent: next, can: rightsOn(v, next, parent) });
+        },
+      );
+
+      // ---- discussion (MB2) ----
+
+      const REF = {
+        type: 'object',
+        additionalProperties: false,
+        required: ['kind', 'app', 'type', 'id'],
+        properties: { kind: { const: 'ref' }, app: TEXT(40), type: TEXT(40), id: TEXT(64) },
+      } as const;
+      /** The intent a ref names, loaded as the viewer sees it; or a refusal sent. Only Mandate's intents have discussions for now. */
+      const discussed = async (v: Viewer, ref: { app: string; type: string; id: string }, reply: FastifyReply) => {
+        if (ref.app !== manifest.id || ref.type !== 'intent') {
+          sendProblem(reply, 400, 'bad-ref', 'Only intents have discussions for now.');
+          return undefined;
+        }
+        const loaded = await load(v, ref.id, reply);
+        if (!loaded) return undefined;
+        const messages = await store.messages(ref.id);
+        const open = openConcern(messages);
+        return { loaded, messages, open, may: discussing(v, loaded.intent, loaded.parent, Boolean(open)) };
+      };
+      /** Who answers a part's concerns: whoever passed it down, by name. */
+      const giverName = (i: Intent, parent?: Intent) => i.passedByName || parent?.holderName || '';
+
+      /** An intent's discussion, for whoever sees it in full. Summary sight answers 404: the parts beside yours don't read each other's. */
+      app.get<{ Querystring: { app: string; type: string; id: string } }>(
+        '/threads',
+        { schema: { querystring: { type: 'object', additionalProperties: false, required: ['app', 'type', 'id'], properties: { app: TEXT(40), type: TEXT(40), id: TEXT(64) } } } },
+        async (req, reply): Promise<Thread | FastifyReply> => {
+          const v = await viewerOf(req, reply);
+          if (!v) return reply;
+          const found = await discussed(v, req.query, reply);
+          if (!found) return reply;
+          const { loaded, messages, open, may } = found;
+          return {
+            ref: { kind: 'ref', app: manifest.id, type: 'intent', id: loaded.intent.id },
+            messages: messages.map(shown),
+            ...(open ? { waiting: { concern: open.id, on: giverName(loaded.intent, loaded.parent) } } : {}),
+            can: { write: may.kinds.length > 0, kinds: may.kinds, ...(may.why ? { why: may.why } : {}) },
+          };
+        },
+      );
+
+      /** Sends a message: a concern or a note from whoever holds it, an answer or a note from whoever passed it down. The other side is told. */
+      app.post<{ Body: MessageBody }>(
+        '/threads/messages',
+        {
+          schema: {
+            body: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['ref', 'kind', 'words'],
+              properties: { ref: REF, kind: { enum: ['concern', 'answer', 'note'] }, words: { type: 'string', minLength: 1, maxLength: 4000, pattern: '\\S' } },
+            },
+          },
+        },
+        async (req, reply) => {
+          const v = await viewerOf(req, reply);
+          if (!v) return reply;
+          const found = await discussed(v, req.body.ref, reply);
+          if (!found) return reply;
+          const { loaded, open, may } = found;
+          const { intent, parent } = loaded;
+          if (ended(intent)) return unfit(reply, may.why ?? 'It’s closed, so its discussion is too.');
+          if (!may.kinds.includes(req.body.kind))
+            return refuse(reply, req.body.kind === 'answer' && may.kinds.length ? 'There’s no concern waiting for an answer.' : (may.why ?? 'Only whoever holds this part raises a concern; whoever passed it down answers one.'));
+          const at = stamp();
+          const words = req.body.words.trim();
+          const message: Message = { id: newId(), intent: intent.id, kind: req.body.kind, words, by: v.id, byName: v.name, at, ...(req.body.kind === 'answer' && open ? { answers: open.id } : {}) };
+          await store.commit({ messages: [message], events: [event(TOPICS.discussed, intent, { message: message.id, kind: message.kind })] });
+          await recorded({ actor: v.id, action: 'intent.discussed', target: intent.id, workspace: intent.workspace, detail: { kind: message.kind } });
+          // Whoever holds it writes to whoever passed it down, and the other way round.
+          const holderSide = amongHolders(v, intent) && req.body.kind !== 'answer';
+          await told({
+            recipients: (holderSide ? giverOf(intent, parent) : await holdersOf(intent)).filter((p) => p !== v.id),
+            workspace: holderSide ? (parent?.workspace ?? intent.workspace) : intent.workspace,
+            title: { concern: `${v.name} raised a concern about “${intent.title}”`, answer: `${v.name} answered your concern about “${intent.title}”`, note: `${v.name} wrote about “${intent.title}”` }[message.kind],
+            detail: words.slice(0, 280),
+            needsYou: message.kind === 'concern',
+            link: `/intents/${intent.id}#discussion`,
+          });
+          return reply.code(201).send(shown(message));
+        },
+      );
+
+      /**
+       * The giver changes a part that waits for its back-brief: its name and why it matters. It's issued as the
+       * next version, the holder is asked to say it back again, and a concern waiting on it gets the change as its answer.
+       */
+      app.patch<{ Params: { id: string }; Body: RevisePartBody }>(
+        '/intents/:id/passed',
+        { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, minProperties: 1, properties: { title: TITLE, purpose: TEXT(2000) } } } },
+        async (req, reply) => {
+          const v = await viewerOf(req, reply);
+          if (!v) return reply;
+          const loaded = await load(v, req.params.id, reply);
+          if (!loaded) return reply;
+          const { intent, parent } = loaded;
+          if (!loaded.can.revisePart)
+            return intent.life === 'active' && rightsOn(v, { ...intent, life: 'passed' }, parent).revisePart
+              ? unfit(reply, 'It’s been accepted: change your own intent, and they’ll be asked to confirm theirs still fits.')
+              : refuse(reply, 'Only whoever passed this part down changes it, while it waits for its back-brief.');
+          const at = stamp();
+          const number = intent.version + 1;
+          const title = req.body.title?.trim() || intent.title;
+          const draft = { ...intent.draft, ...(req.body.purpose !== undefined ? { purpose: req.body.purpose.trim() } : {}) };
+          const next: Intent = { ...intent, title, draft, version: number, updatedAt: at };
+          const changed = [title !== intent.title ? `its name is now “${title}”` : '', draft.purpose !== intent.draft.purpose ? 'why it matters' : ''].filter(Boolean).join(', and ');
+          const open = openConcern(await store.messages(intent.id));
+          const answer: Message | undefined = open ? { id: newId(), intent: intent.id, kind: 'answer', words: `Changed what was passed: ${changed || 'nothing but the version'}.`, answers: open.id, by: v.id, byName: v.name, at } : undefined;
+          const ok = await commit(
+            {
+              intents: [next],
+              versions: [{ intent: intent.id, version: number, title, statement: draft, issuedBy: v.id, issuedByName: v.name, issuedAt: at }],
+              ...(answer ? { messages: [answer] } : {}),
+              events: [event(TOPICS.issued, intent, { version: number }), ...(answer ? [event(TOPICS.discussed, intent, { message: answer.id, kind: 'answer' })] : [])],
+            },
+            reply,
+          );
+          if (!ok) return reply;
+          await recorded({ actor: v.id, action: 'intent.revised-part', target: intent.id, workspace: intent.workspace, detail: { title, version: number } });
+          await told({
+            recipients: (await holdersOf(next)).filter((p) => p !== v.id),
+            workspace: next.workspace,
+            title: `${v.name} changed “${title}”`,
+            detail: `Read what changed, then say it back to accept it.`,
+            needsYou: true,
+            link: `/intents/${intent.id}`,
+          });
+          await waiting(backBriefKey(intent.id), intent.workspace, backBriefItem(next, `${v.name} changed what was passed. Say it back in your own words to accept it.`, v.id, true));
+          return detailOf(v, { ...loaded, intent: next, tree: loaded.tree.map((d) => (d.id === next.id ? next : d)), can: rightsOn(v, next, parent) });
         },
       );
 

@@ -340,6 +340,62 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect((await t.call(engLead, 'GET', `/intents/${eng.id}`)).body.entities.map((e: { entity: { id: string } }) => e.entity.id).sort()).toEqual(['ent_new', 'ent_old']);
   });
 
+  it('keeps a part’s discussion: the holder’s concern, the giver’s answer, and nobody else’s word', async () => {
+    const { op, eng } = await alpha(t.call);
+    const jo = (await t.call(engLead, 'POST', `/intents/${eng.id}/pass`, { to: `team:${HULL}`, title: 'Survey Corran’s hull' })).body;
+    const ref = (id: string) => ({ kind: 'ref', app: 'mandate', type: 'intent', id });
+    const hull = on('jo', { id: HULL, kind: 'team', role: 'lead' });
+    await t.call(hull, 'POST', `/intents/${jo.id}/back-brief`, { words: 'Survey the hull by Friday.', concern: 'No dry dock is free this week.', outcome: 'concern' });
+    let thread = (await t.call(engLead, 'GET', `/threads?app=mandate&type=intent&id=${jo.id}`)).body;
+    expect(thread.messages).toMatchObject([{ kind: 'concern', words: 'No dry dock is free this week.', byName: 'Jo Lee' }]);
+    expect(thread.waiting).toMatchObject({ concern: thread.messages[0].id, on: 'Dana Ross' });
+    expect(thread.can.kinds.sort()).toEqual(['answer', 'note']);
+    expect(t.notices.at(-1)).toMatchObject({ recipients: ['dana'], needsYou: true });
+
+    expect((await t.call(engLead, 'POST', '/threads/messages', { ref: ref(jo.id), kind: 'answer', words: 'Use the floating dock at Ardel.' })).status).toBe(201);
+    thread = (await t.call(hull, 'GET', `/threads?app=mandate&type=intent&id=${jo.id}`)).body;
+    expect(thread.messages.map((m: { kind: string }) => m.kind)).toEqual(['concern', 'answer']);
+    expect(thread.messages[1].answers).toBe(thread.messages[0].id);
+    expect(thread.waiting).toBeUndefined();
+    expect(thread.can.kinds.sort()).toEqual(['concern', 'note']);
+    expect(t.notices.at(-1)).toMatchObject({ title: expect.stringContaining('answered'), link: `/intents/${jo.id}#discussion` });
+    // Nothing waits for an answer now, and the holder doesn't answer their own.
+    expect((await t.call(engLead, 'POST', '/threads/messages', { ref: ref(jo.id), kind: 'answer', words: 'Again' })).body.message).toBe('There’s no concern waiting for an answer.');
+
+    // The org's lead reads it in full, but only the two sides write.
+    const read = (await t.call(orgLead, 'GET', `/threads?app=mandate&type=intent&id=${jo.id}`)).body;
+    expect(read.can).toMatchObject({ write: false, why: expect.stringContaining('whoever passed it down') });
+    expect((await t.call(orgLead, 'POST', '/threads/messages', { ref: ref(jo.id), kind: 'note', words: 'Hello' })).status).toBe(403);
+    // Someone who sees the part only as a summary reads no discussion.
+    const sam = (await t.call(engLead, 'POST', `/intents/${eng.id}/pass`, { to: 'person:sam', title: 'Order bearings' })).body;
+    expect((await t.call(engMember('sam'), 'GET', `/threads?app=mandate&type=intent&id=${jo.id}`)).status).toBe(404);
+    expect((await t.call(engMember('sam'), 'GET', `/threads?app=folio&type=document&id=${sam.id}`)).body.message).toBe('Only intents have discussions for now.');
+    expect((await t.outbox()).filter((e) => e.topic === TOPICS.discussed).map((e) => e.payload.kind)).toEqual(['concern', 'answer']);
+
+    // Closed, so its discussion is too; what was said stays.
+    await t.call(orgLead, 'POST', `/intents/${op.id}/withdraw`, { reason: 'Route closed' });
+    const closed = (await t.call(engLead, 'GET', `/threads?app=mandate&type=intent&id=${jo.id}`)).body;
+    expect(closed).toMatchObject({ messages: [{}, {}], can: { write: false, why: 'It’s closed, so its discussion is too.' } });
+    expect((await t.call(hull, 'POST', '/threads/messages', { ref: ref(jo.id), kind: 'note', words: 'Late' })).status).toBe(409);
+  });
+
+  it('lets whoever passed a part down change it while it waits, as the next version, answering the concern', async () => {
+    const { eng, sam } = await alpha(t.call);
+    expect((await t.call(engLead, 'PATCH', `/intents/${sam.id}/passed`, { title: 'X' })).body.message).toContain('It’s been accepted');
+    const part = (await t.call(engLead, 'POST', `/intents/${eng.id}/pass`, { to: 'person:sam', title: 'Order bearings', purpose: 'The refit needs them.' })).body;
+    await t.call(engMember('sam'), 'POST', `/intents/${part.id}/back-brief`, { words: 'Order bearings.', concern: 'Which supplier?', outcome: 'concern' });
+    expect((await t.call(engMember('sam'), 'PATCH', `/intents/${part.id}/passed`, { title: 'Mine now' })).status).toBe(403);
+    const changed = (await t.call(engLead, 'PATCH', `/intents/${part.id}/passed`, { title: 'Order bearings from Halden', purpose: 'The refit needs them by the 14th.' })).body;
+    expect(changed.intent).toMatchObject({ title: 'Order bearings from Halden', life: 'passed', version: 2 });
+    expect(changed.statement.purpose).toBe('The refit needs them by the 14th.');
+    expect(changed.versions.map((x: { version: number }) => x.version)).toEqual([2, 1]);
+    const thread = (await t.call(engMember('sam'), 'GET', `/threads?app=mandate&type=intent&id=${part.id}`)).body;
+    expect(thread.messages.at(-1)).toMatchObject({ kind: 'answer', words: expect.stringContaining('Changed what was passed') });
+    expect(thread.waiting).toBeUndefined();
+    expect(t.inbox.get(`back-brief/${part.id}`)).toMatchObject({ state: 'open', item: { owner: { kind: 'person', id: 'sam' } } });
+    expect((await t.call(engMember('sam'), 'POST', `/intents/${part.id}/back-brief`, { words: 'Order from Halden by the 14th.', outcome: 'accepted' })).body.intent.life).toBe('active');
+  });
+
   it('binds entities and documents, carries the chosen ones down, and gives other tools the context', async () => {
     const { op } = await alpha(t.call);
     const halcyon = { kind: 'entity', id: 'ent_halcyon', type: 'vessel', label: 'MV Halcyon' };
@@ -395,7 +451,7 @@ describe.runIf(process.env.DATABASE_URL)('mandate on Postgres', () => {
     await admin.end();
   });
   behaves(async () => {
-    await admin.query('truncate mandate.event_cursor, mandate.outbox, mandate.entity_bindings, mandate.document_bindings, mandate.assessments, mandate.back_briefs, mandate.versions, mandate.intents');
+    await admin.query('truncate mandate.messages, mandate.event_cursor, mandate.outbox, mandate.entity_bindings, mandate.document_bindings, mandate.assessments, mandate.back_briefs, mandate.versions, mandate.intents');
     return {
       store,
       outbox: async () => (await admin.query('select topic, workspace_id as workspace, payload from mandate.outbox order by id')).rows,

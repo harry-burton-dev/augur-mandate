@@ -1,7 +1,7 @@
 import { AppError, createAppClient, type AppClient, type AppFetcher } from '@augur/app-kit';
 import type { DocumentRef, EntityRef } from '@augur/mfe-sdk';
 import manifest from '../../manifest.json';
-import type { EditBody, MandatePaths, PassBody, BackBriefBody, Rating } from '../../service/src/api-types.js';
+import type { EditBody, MandatePaths, MessageKind, PassBody, BackBriefBody, Rating, RevisePartBody } from '../../service/src/api-types.js';
 
 export type { EntityRef };
 // The wire types are written once, in the service's api-types.ts, and shared with it.
@@ -15,6 +15,8 @@ export type {
   FloorKind,
   HomeGlance,
   Life,
+  Message,
+  MessageKind,
   NeedsHolder,
   Rating,
   Rights,
@@ -73,6 +75,15 @@ export class MandateApi {
   /** Intents the person can read, by the words of their title. */
   search(q: string) {
     return asked(this.client.get('/search', { query: { q } }));
+  }
+  thread(id: string, signal?: AbortSignal) {
+    return asked(this.client.get('/threads', { query: { app: manifest.id, type: 'intent', id }, signal }));
+  }
+  say(id: string, kind: MessageKind, words: string) {
+    return asked(this.client.post('/threads/messages', { body: { ref: { kind: 'ref', app: manifest.id, type: 'intent', id }, kind, words } }));
+  }
+  revisePart(id: string, change: RevisePartBody) {
+    return asked(this.client.patch('/intents/{id}/passed', { params: { id }, body: change }));
   }
   intent(id: string, signal?: AbortSignal) {
     return asked(this.client.get('/intents/{id}', { params: { id }, signal }));

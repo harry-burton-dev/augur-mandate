@@ -53,6 +53,8 @@ import {
   type EntityRef,
   type FloorItem,
   MandateApi,
+  type Message,
+  type MessageKind,
   type NeedsHolder,
   type Rating,
   type Statement,
@@ -88,6 +90,9 @@ export const markOf = (i: Pick<Summary, 'life' | 'rating' | 'needsHolder'>): { s
       return { status: 'queued', label: 'Under way' };
   }
 };
+
+/** A message's kind, as the discussion shows it. */
+const KIND_WORDS: Record<MessageKind, string> = { concern: 'Concern', answer: 'Answer', note: 'Note' };
 
 /** Why a part has nobody to hold it, in words, before when it happened. */
 const NEEDS_HOLDER: Record<NeedsHolder['why'], (name: string) => string> = {
@@ -157,7 +162,7 @@ const ROLE_OPTIONS: SelectOption[] = Object.entries(ROLE_WORDS).map(([value, lab
   }[value],
 }));
 
-type DialogName = 'new' | 'edit' | 'pass' | 'pass-again' | 'accept' | 'concern' | 'assess' | 'achieve' | 'withdraw' | 'role';
+type DialogName = 'new' | 'edit' | 'pass' | 'pass-again' | 'revise-part' | 'say' | 'accept' | 'concern' | 'assess' | 'achieve' | 'withdraw' | 'role';
 
 /** Where Mandate is: a floor's list, what you hold, or one intent. */
 type Where = { view: 'floor' } | { view: 'yours' } | { view: 'intent'; id: string };
@@ -229,6 +234,8 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
   const yoursData = useData(['yours'], (signal) => api.yours(signal), { refreshOn: CHANGES });
   const openId = place.view === 'intent' ? place.id : '';
   const detailData = useData(['intent', openId], (signal) => api.intent(openId, signal), { enabled: Boolean(openId), refreshOn: CHANGES });
+  const threadData = useData(['thread', openId], (signal) => api.thread(openId, signal), { enabled: Boolean(openId), refreshOn: CHANGES });
+  const thread = openId ? threadData.data : undefined;
   const floor = floorData.data;
   const yours = yoursData.data;
   const detail = openId ? detailData.data : undefined;
@@ -451,6 +458,7 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
     const acts: (PageAction & { run: () => void })[] = [];
     const add = (id: string, label: string, kind: ButtonKind, run: () => void) => acts.push({ id, label, kind, run });
     if (can.passAgain) add('pass-again', 'Pass it again', 'primary', () => void openPass('pass-again'));
+    if (can.revisePart) add('revise-part', 'Change what you passed', thread?.waiting ? 'primary' : 'secondary', () => setDialog('revise-part'));
     if (can.backBrief && intent.life === 'passed') {
       add('back-brief', 'Back-brief', 'primary', () => setDialog('accept'));
       add('concern', 'Raise a concern', 'secondary', () => setDialog('concern'));
@@ -528,6 +536,40 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
     await findTargets('', which === 'pass-again');
   };
 
+  /** The part's discussion, oldest first: concerns, answers and notes between whoever holds it and whoever passed it down. */
+  const discussion = (d: Detail) => {
+    if (!thread) return null;
+    const { messages, waiting, can } = thread;
+    // Nothing said and nothing they may say: there's nothing to show or explain.
+    if (!messages.length && !can.write && !d.ended) return null;
+    return (
+      <Section label="Discussion" count={messages.length} limit={0}>
+        <div id="discussion" className="mandate-discussion">
+          {messages.length ? (
+            <ol className="mandate-messages">
+              {messages.map((m: Message) => (
+                <li key={m.id} className="mandate-message">
+                  <span className="mandate-quiet">
+                    {KIND_WORDS[m.kind]} · {m.byName} · {relativeTime(m.at)}
+                  </span>
+                  <Prose value={m.words} />
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <Note>Raise a concern or leave a note for whoever passed this down.</Note>
+          )}
+          {waiting ? <Notice tone={can.kinds.includes('answer') ? 'needs' : 'info'}>{`Waiting for an answer from ${waiting.on || 'whoever passed it down'}.`}</Notice> : null}
+          <div>
+            <Button kind="secondary" size="sm" disabled={!can.write} reason={can.why} onPress={() => setDialog('say')}>
+              Write
+            </Button>
+          </div>
+        </div>
+      </Section>
+    );
+  };
+
   const intentView = () => {
     const d = detail;
     if (!d)
@@ -578,6 +620,7 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
             </p>
           </Section>
         ) : null}
+        {discussion(d)}
         <Section label="Passed down" count={d.below.length} limit={0}>
           {d.below.length ? (
             <ul className="mandate-tree mandate-tree-top">{d.below.map(branch)}</ul>
@@ -703,6 +746,16 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
   };
   const submitPassAgain: DialogSubmit = async (values) => {
     await change(() => api.passAgain(detail!.intent.id, values.to ?? ''), 'Passed again. It’s under way once they back-brief it.');
+  };
+  const submitSay: DialogSubmit = async (values) => {
+    const kind = (values.kind || thread?.can.kinds[0] || 'note') as MessageKind;
+    await change(() => api.say(detail!.intent.id, kind, values.words ?? ''), 'Sent.');
+  };
+  const submitRevisePart: DialogSubmit = async (values) => {
+    await change(
+      () => api.revisePart(detail!.intent.id, { title: values.title ?? '', purpose: values.purpose ?? '' }),
+      'Changed. They’re asked to say it back again.',
+    );
   };
   const submitAccept: DialogSubmit = async (values) => {
     await change(
@@ -877,6 +930,51 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
                     .filter((t) => t.to !== d.intent.holder)
                     .map((t) => ({ value: t.to, label: t.you ? `${t.name} (you)` : t.name, detail: t.to.startsWith('team:') ? 'Team' : (t.email ?? '') }))}
                 />
+              </>
+            }
+          />
+        ) : null;
+      case 'say': {
+        if (!d || !thread) return null;
+        const kinds = thread.can.kinds;
+        return (
+          <Dialog
+            open
+            onClose={close}
+            size="read"
+            eyebrow="Discussion"
+            heading={d.intent.title}
+            summary={kinds.includes('answer') ? 'Answer the concern waiting here, or leave a note.' : 'Whoever passed it down reads it, and the people holding it.'}
+            actionLabel="Send"
+            busyLabel="Sending…"
+            onSubmit={submitSay}
+            fields={
+              <>
+                {kinds.length > 1 ? (
+                  <Select name="kind" label="It’s" required options={kinds.map((k) => ({ value: k, label: KIND_WORDS[k] }))} defaultValue={kinds.includes('answer') ? 'answer' : 'note'} />
+                ) : null}
+                <Editor name="words" label="What you want to say" required rows={4} guide="3 sentences" />
+              </>
+            }
+          />
+        );
+      }
+      case 'revise-part':
+        return d ? (
+          <Dialog
+            open
+            onClose={close}
+            size="read"
+            eyebrow="Change what you passed"
+            heading={d.intent.title}
+            summary="It’s issued as the next version, and they’re asked to say it back again. A concern waiting here gets the change as its answer."
+            actionLabel="Change it"
+            busyLabel="Changing…"
+            onSubmit={submitRevisePart}
+            fields={
+              <>
+                <TextField name="title" label="Their part" required maxLength={140} defaultValue={d.intent.title} />
+                <Editor name="purpose" label="Why it matters to the whole" optional rows={2} guide="2 sentences" defaultValue={d.statement.purpose} />
               </>
             }
           />
