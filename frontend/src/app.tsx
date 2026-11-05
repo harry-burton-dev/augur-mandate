@@ -53,6 +53,7 @@ import {
   type EntityRef,
   type FloorItem,
   MandateApi,
+  type CloseChoice,
   type Message,
   type MessageKind,
   type NeedsHolder,
@@ -90,6 +91,12 @@ export const markOf = (i: Pick<Summary, 'life' | 'rating' | 'needsHolder'>): { s
     default:
       return { status: 'queued', label: 'Under way' };
   }
+};
+
+/** How many parts below it are still open: what closing it touches. */
+const openBelow = (d: Pick<Detail, 'below'>): number => {
+  const count = (bs: Branch[]): number => bs.reduce((n, b) => n + (['achieved', 'superseded', 'withdrawn'].includes(b.life) ? 0 : 1) + count(b.below), 0);
+  return count(d.below);
 };
 
 /** A message's kind, as the discussion shows it. */
@@ -200,6 +207,7 @@ const unissued = (d: Detail) => {
 };
 
 const history = (d: Detail): TimelineItem[] => [
+  ...(d.stoodAlone ? [{ at: d.stoodAlone.at, who: d.stoodAlone.from || 'The intent above', what: 'closed, and this stood alone' }] : []),
   ...d.versions.map((v) => ({
     at: v.at,
     who: v.by,
@@ -784,12 +792,26 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
   const submitAssess: DialogSubmit = async (values) => {
     await change(() => api.assess(detail!.intent.id, values.rating as Rating, values.note ?? ''), 'Thanks. Whoever passed it down sees it.');
   };
-  const submitAchieve: DialogSubmit = async () => {
-    await change(() => api.achieve(detail!.intent.id), 'Closed as achieved.');
+  const submitAchieve: DialogSubmit = async (values) => {
+    await change(() => api.achieve(detail!.intent.id, (values.parts || 'close') as CloseChoice), 'Closed as achieved.');
   };
   const submitWithdraw: DialogSubmit = async (values) => {
-    await change(() => api.withdraw(detail!.intent.id, values.reason ?? ''), 'Withdrawn.');
+    await change(() => api.withdraw(detail!.intent.id, values.reason ?? '', (values.parts || 'close') as CloseChoice), 'Withdrawn.');
   };
+  /** When parts are still open below: whether they close too, or stand on their own. */
+  const partsChoice = (d: Detail, closing: string) =>
+    openBelow(d) ? (
+      <Select
+        name="parts"
+        label={`The ${openBelow(d)} open part${openBelow(d) === 1 ? '' : 's'} below`}
+        required
+        defaultValue="close"
+        options={[
+          { value: 'close', label: `Close them too`, detail: `They’re ${closing} with it, and their holders are told.` },
+          { value: 'stand-alone', label: 'Let them stand alone', detail: 'Each keeps going on its own floor, with what it carries.' },
+        ]}
+      />
+    ) : undefined;
   const submitRole: DialogSubmit = async (values) => {
     const p = picked!;
     await change(() => api.bindEntity(detail!.intent.id, p, values.role ?? 'subject'));
@@ -1052,10 +1074,11 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
             onClose={close}
             eyebrow={d.intent.title}
             heading="Close it as achieved?"
-            summary="Anything still open below it closes with it."
+            summary={openBelow(d) ? 'Choose what happens to the parts still open below it.' : undefined}
             actionLabel="Close as achieved"
             busyLabel="Closing…"
             onSubmit={submitAchieve}
+            fields={partsChoice(d, 'closed')}
           />
         ) : null;
       case 'withdraw':
@@ -1066,11 +1089,16 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
             danger
             eyebrow={d.intent.title}
             heading="Withdraw it?"
-            summary="Every part still open below it is withdrawn too, and its holders are told."
+            summary={openBelow(d) ? 'Choose what happens to the parts still open below it.' : undefined}
             actionLabel="Withdraw"
             busyLabel="Withdrawing…"
             onSubmit={submitWithdraw}
-            fields={<TextField name="reason" label="Why" optional multiline rows={2} maxLength={1000} />}
+            fields={
+              <>
+                {partsChoice(d, 'withdrawn')}
+                <TextField name="reason" label="Why" optional multiline rows={2} maxLength={1000} />
+              </>
+            }
           />
         ) : null;
       case 'role':

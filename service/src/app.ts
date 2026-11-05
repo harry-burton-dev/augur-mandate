@@ -36,6 +36,8 @@ import type {
   Thread,
   WithdrawBody,
   Yours,
+  AchieveBody,
+  CloseChoice,
 } from './api-types.ts';
 import { auditFromEnv, type Audit } from './audit.ts';
 import { bindingOutbox } from './follow.ts';
@@ -264,6 +266,10 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
       store.documentBindings([intent.id]),
     ]);
     const issued = versions[0];
+    // Carried down from an intent no longer above it (it let this stand alone): named, and said so.
+    const far = [...new Set([...entities, ...documents].map((b) => b.inheritedFrom).filter((id): id is string => Boolean(id) && !byId.has(id!)))];
+    const elsewhere = new Map((await store.intents([...far, ...(intent.stoodAlone ? [intent.stoodAlone.from] : [])])).map((i) => [i.id, i.title]));
+    const fromTitle = (id: string) => byId.get(id)?.title ?? `${elsewhere.get(id) ?? ''} (no longer above)`;
     const chainVersions = await Promise.all(chain.map((a) => store.versions(a.id).then((vs) => vs[0])));
     return {
       intent: summaryOf(intent, 'full'),
@@ -287,12 +293,13 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
       entities: entities.map(({ entity, role, inheritedFrom, at, state, mergedFrom }) => ({
         entity,
         role,
-        ...(inheritedFrom ? { from: byId.get(inheritedFrom)?.title ?? '' } : {}),
+        ...(inheritedFrom ? { from: fromTitle(inheritedFrom) } : {}),
         at,
         ...(state === 'retired' ? { state } : {}),
         ...(mergedFrom ? { mergedFrom } : {}),
       })),
-      documents: documents.map(({ document, inheritedFrom, at }) => ({ document, ...(inheritedFrom ? { from: byId.get(inheritedFrom)?.title ?? '' } : {}), at })),
+      documents: documents.map(({ document, inheritedFrom, at }) => ({ document, ...(inheritedFrom ? { from: fromTitle(inheritedFrom) } : {}), at })),
+      ...(intent.stoodAlone ? { stoodAlone: { from: elsewhere.get(intent.stoodAlone.from) ?? '', at: intent.stoodAlone.at } } : {}),
       recheck: needsRecheck(intent, parent),
       assessmentDue: holdsNow(v, intent) && assessmentDue(intent, now().getTime()),
       can,
@@ -889,11 +896,42 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
       );
 
       /** Ends an intent, and every open part below it: achieved, or withdrawn. */
-      const close = async (v: Viewer, loaded: Loaded, life: 'achieved' | 'withdrawn', reason: string, _reply: FastifyReply) => {
+      /**
+       * Lets the open parts below an intent stand alone (MB4): each part directly below becomes the root of
+       * its own tree, and its own parts come with it. They keep their holders, statements and bindings.
+       */
+      const standAlone = (intent: Intent, below: readonly Intent[], at: string): Intent[] => {
+        const tops = below.filter((d) => d.parent === intent.id);
+        return below.map((d): Intent => {
+          const top = tops.find((t) => t.id === d.id || d.ancestors.includes(t.id))!;
+          if (d.id !== top.id) return { ...d, root: top.id, ancestors: d.ancestors.slice(d.ancestors.indexOf(top.id)), updatedAt: at };
+          const { parent: _, briefedParentVersion: __, ...rest } = d;
+          return { ...rest, root: d.id, ancestors: [], mainEffort: false, stoodAlone: { from: intent.id, at }, updatedAt: at };
+        });
+      };
+
+      /** Ends an intent: achieved, or withdrawn. The open parts below close with it, or stand alone. */
+      const close = async (v: Viewer, loaded: Loaded, life: 'achieved' | 'withdrawn', reason: string, choice: CloseChoice = 'close') => {
         const { intent, tree } = loaded;
         const at = stamp();
         const below = tree.filter((d) => d.ancestors.includes(intent.id) && !ended(d));
         const next: Intent = { ...intent, life, endedAt: at, endedReason: reason, updatedAt: at };
+        if (choice === 'stand-alone') {
+          const lifted = standAlone(intent, below, at);
+          const tops = lifted.filter((d) => d.stoodAlone?.from === intent.id);
+          await store.commit({
+            intents: [next, ...lifted],
+            events: [event(life === 'achieved' ? TOPICS.achieved : TOPICS.withdrawn, intent), ...tops.map((t) => event(TOPICS.stoodAlone, t, { from: intent.id }))],
+          });
+          await recorded({ actor: v.id, action: `intent.${life}`, target: intent.id, workspace: intent.workspace, detail: { title: intent.title, ...(reason ? { reason } : {}), stoodAlone: tops.length } });
+          for (const t of tops) {
+            await recorded({ actor: v.id, action: 'intent.stood-alone', target: t.id, workspace: t.workspace, detail: { title: t.title, from: intent.id } });
+            const recipients = (await holdersOf(t)).filter((p) => p !== v.id);
+            await told({ recipients, workspace: t.workspace, title: `${intent.title} was ${life === 'achieved' ? 'achieved' : 'withdrawn'}`, detail: `“${t.title}” stands on its own now.`, link: `/intents/${t.id}` });
+          }
+          if (intent.needsHolder) await settled(needsHolderKey(intent.id), 'withdrawn');
+          return detailOf(v, { ...loaded, intent: next, tree: tree.map((d) => (d.id === intent.id ? next : d)).filter((d) => !lifted.some((l) => l.id === d.id)), can: rightsOn(v, next, loaded.parent) });
+        }
         const parts = below.map((d): Intent => ({ ...d, life: life === 'achieved' ? 'superseded' : 'withdrawn', endedAt: at, endedReason: life === 'achieved' ? `${intent.title} was achieved.` : `${intent.title} was withdrawn.`, updatedAt: at }));
         await store.commit({
           intents: [next, ...parts],
@@ -910,25 +948,30 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
         return detailOf(v, { ...loaded, intent: next, tree: tree.map((d) => (d.id === intent.id ? next : (parts.find((p) => p.id === d.id) ?? d))), can: rightsOn(v, next, loaded.parent) });
       };
 
-      app.post<{ Params: { id: string } }>('/intents/:id/achieve', { schema: { params: ID_PARAMS } }, async (req, reply) => {
-        const v = await viewerOf(req, reply);
-        if (!v) return reply;
-        const loaded = await load(v, req.params.id, reply);
-        if (!loaded) return reply;
-        if (!loaded.can.achieve) return refuse(reply, 'Whoever passed this down closes it as achieved, once it’s under way.');
-        return close(v, loaded, 'achieved', '', reply);
-      });
+      const CHOICE = { enum: ['close', 'stand-alone'] } as const;
+      app.post<{ Params: { id: string }; Body: AchieveBody | undefined }>(
+        '/intents/:id/achieve',
+        { schema: { params: ID_PARAMS, body: { type: ['object', 'null'], additionalProperties: false, properties: { parts: CHOICE } } } },
+        async (req, reply) => {
+          const v = await viewerOf(req, reply);
+          if (!v) return reply;
+          const loaded = await load(v, req.params.id, reply);
+          if (!loaded) return reply;
+          if (!loaded.can.achieve) return refuse(reply, 'Whoever passed this down closes it as achieved, once it’s under way.');
+          return close(v, loaded, 'achieved', '', req.body?.parts);
+        },
+      );
 
       app.post<{ Params: { id: string }; Body: WithdrawBody }>(
         '/intents/:id/withdraw',
-        { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, properties: { reason: TEXT(1000) } } } },
+        { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, properties: { reason: TEXT(1000), parts: CHOICE } } } },
         async (req, reply) => {
           const v = await viewerOf(req, reply);
           if (!v) return reply;
           const loaded = await load(v, req.params.id, reply);
           if (!loaded) return reply;
           if (!loaded.can.withdraw) return refuse(reply, 'Only whoever passed this down, or holds it on its own floor, can withdraw it.');
-          return close(v, loaded, 'withdrawn', (req.body?.reason ?? '').trim(), reply);
+          return close(v, loaded, 'withdrawn', (req.body?.reason ?? '').trim(), req.body?.parts);
         },
       );
 

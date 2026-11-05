@@ -396,6 +396,30 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect((await t.call(engMember('sam'), 'POST', `/intents/${part.id}/back-brief`, { words: 'Order from Halden by the 14th.', outcome: 'accepted' })).body.intent.life).toBe('active');
   });
 
+  it('lets the open parts stand alone when the intent above closes, keeping what they carry and saying where from', async () => {
+    const { op, eng, sam } = await alpha(t.call);
+    const ship = { kind: 'entity', id: 'ent_ship', type: 'vessel', label: 'Halcyon' };
+    await t.call(orgLead, 'POST', `/intents/${op.id}/entities`, { entity: ship, role: 'subject' });
+    const log = (await t.call(orgLead, 'POST', `/intents/${op.id}/pass`, { to: `team:${LOG}`, title: 'Fuel Ardel', carry: { entities: ['ent_ship|subject'] } })).body;
+    const closed = (await t.call(orgLead, 'POST', `/intents/${op.id}/withdraw`, { reason: 'The route moved', parts: 'stand-alone' })).body;
+    expect(closed.intent.life).toBe('withdrawn');
+    expect(closed.below).toEqual([]);
+    // Engineering's part now heads its own tree, with Sam's part still below it.
+    const own = (await t.call(engLead, 'GET', `/intents/${eng.id}`)).body;
+    expect(own.intent).toMatchObject({ life: 'active', root: eng.id });
+    expect(own.intent.parent).toBeUndefined();
+    expect(own.lineOfSight).toEqual([]);
+    expect(own.stoodAlone).toMatchObject({ from: 'Operation Alpha' });
+    expect(own.below.map((b: { id: string }) => b.id)).toEqual([sam.id]);
+    expect((await t.call(engMember('sam'), 'GET', `/intents/${sam.id}`)).body.lineOfSight.map((a: { id: string }) => a.id)).toEqual([eng.id]);
+    expect((await t.call(engLead, 'GET', '/floor')).body.intents.map((i: { id: string }) => i.id)).toContain(eng.id);
+    // What Logistics' part carried down stays, named as no longer above it.
+    const fuel = (await t.call(on('priya', { id: LOG, kind: 'team', role: 'lead' }), 'GET', `/intents/${log.id}`)).body;
+    expect(fuel.entities).toMatchObject([{ entity: { id: 'ent_ship' }, from: 'Operation Alpha (no longer above)' }]);
+    expect((await t.outbox()).filter((e) => e.topic === TOPICS.stoodAlone).map((e) => e.payload.intent).sort()).toEqual([eng.id, log.id].sort());
+    expect(t.notices.filter((n) => n.detail?.includes('stands on its own'))).not.toHaveLength(0);
+  });
+
   it('passes a part again to a team below, moving it to that team’s floor', async () => {
     const { sam } = await alpha(t.call);
     await t.follow({ topic: PLATFORM_TOPICS.personLeft, payload: { person: 'sam' } });
