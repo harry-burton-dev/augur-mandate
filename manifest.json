@@ -50,6 +50,16 @@
         "icon": "compass"
       },
       {
+        "id": "late-back-brief",
+        "label": "Waiting for a back-brief",
+        "icon": "clock"
+      },
+      {
+        "id": "check-in",
+        "label": "How it’s going",
+        "icon": "gauge"
+      },
+      {
         "id": "needs-holder",
         "label": "To pass again",
         "icon": "person"
