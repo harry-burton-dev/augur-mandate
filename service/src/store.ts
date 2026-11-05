@@ -383,6 +383,11 @@ export const migrations: readonly Migration[] = [
       alter table mandate.intents add column stood_alone_from text;
       alter table mandate.intents add column stood_alone_at timestamptz;`,
   },
+  {
+    // A concern left unanswered (MB2, ADR 0061): which concern the giver was last reminded of, so each is sent once.
+    id: '006_concern_reminders',
+    sql: `alter table mandate.intents add column reminded_concern_for text;`,
+  },
 ];
 
 export const INTENT_COLUMNS = `id, parent_id, root_id, ancestors, workspace_id, floor_principal, floor_kind, floor_name, holder, holder_name, title, life, version, draft,

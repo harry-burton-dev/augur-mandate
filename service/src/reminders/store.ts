@@ -2,8 +2,15 @@ import pg from 'pg';
 import { steadyPool } from '@augur/service-kit';
 import { fromIntentRow, INTENT_COLUMNS, type Intent, type IntentRow } from '../store.ts';
 
-/** Which reminder a row records: the back-brief's, or the assessment's. */
-export type Reminder = 'brief' | 'rating';
+/** A concern still waiting for its answer, with the part it's about and the intent above that. */
+export interface OpenConcern {
+  intent: Intent;
+  parent?: Intent;
+  concern: { id: string; byName: string; at: string };
+}
+
+/** Which reminder a row records: the back-brief's, the assessment's, or an unanswered concern's. */
+export type Reminder = 'brief' | 'rating' | 'concern';
 
 /**
  * What the reminder sweep reads and records (ADR 0061). Each intent keeps what it was last reminded
@@ -15,6 +22,8 @@ export interface ReminderStore {
   waitingForBriefs(through: string): Promise<Intent[]>;
   /** Intents under way whose last assessment (or, without one, their passing or making) was before `before`. */
   underWay(before: Date): Promise<Intent[]>;
+  /** Parts not yet ended whose latest concern has no answer after it. */
+  openConcerns(): Promise<OpenConcern[]>;
   /** What each intent was last reminded for, of those given. */
   reminded(what: Reminder, intents: readonly string[]): Promise<Map<string, string>>;
   /** Intents reminded for something starting with `prefix`: the ones whose reminder may need taking back. */
@@ -25,7 +34,7 @@ export interface ReminderStore {
   release(what: Reminder, intent: string, value: string, previous: string | undefined): Promise<void>;
 }
 
-const COLUMN: Record<Reminder, string> = { brief: 'reminded_brief_for', rating: 'reminded_rating_for' };
+const COLUMN: Record<Reminder, string> = { brief: 'reminded_brief_for', rating: 'reminded_rating_for', concern: 'reminded_concern_for' };
 
 export class PgReminderStore implements ReminderStore {
   private readonly pool: pg.Pool;
@@ -34,7 +43,7 @@ export class PgReminderStore implements ReminderStore {
     this.pool = pool;
   }
 
-  /** Mandate's store makes the columns (003_reminders); this only reads and records them. */
+  /** Mandate's store makes the columns (003_reminders, 006_concern_reminders); this only reads and records them. */
   static connect(connectionString: string) {
     return new PgReminderStore(steadyPool(new pg.Pool({ connectionString, max: 2 })));
   }
@@ -50,6 +59,31 @@ export class PgReminderStore implements ReminderStore {
       [before],
     );
     return rows.map(fromIntentRow);
+  }
+
+  async openConcerns() {
+    const { rows } = await this.pool.query<IntentRow & { concern_id: string; concern_by: string; concern_at: Date }>(
+      `with latest as (
+         select distinct on (ref_id) ref_id as said_on, id as concern_id, kind as said, by_name as concern_by, at as concern_at from mandate.messages
+         where ref_app = 'mandate' and ref_type = 'intent' and kind in ('concern', 'answer')
+         order by ref_id, at desc, id desc
+       )
+       select ${INTENT_COLUMNS}, concern_id, concern_by, concern_at
+       from latest join mandate.intents on id = said_on
+       where said = 'concern' and life in ('passed', 'active') order by id`,
+    );
+    const parents = await this.intents([...new Set(rows.flatMap((r) => (r.parent_id ? [r.parent_id] : [])))]);
+    return rows.map((r): OpenConcern => {
+      const intent = fromIntentRow(r);
+      const parent = intent.parent ? parents.get(intent.parent) : undefined;
+      return { intent, ...(parent ? { parent } : {}), concern: { id: r.concern_id, byName: r.concern_by, at: r.concern_at.toISOString() } };
+    });
+  }
+
+  private async intents(ids: readonly string[]) {
+    if (!ids.length) return new Map<string, Intent>();
+    const { rows } = await this.pool.query<IntentRow>(`select ${INTENT_COLUMNS} from mandate.intents where id = any($1::text[])`, [ids]);
+    return new Map(rows.map((r) => [r.id, fromIntentRow(r)]));
   }
 
   async reminded(what: Reminder, intents: readonly string[]) {

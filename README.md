@@ -2,7 +2,7 @@
 
 Part of AUGUR, which is proprietary; see `LICENSE`.
 
-Intent, passed down floor by floor: the intent pillar app. It lives in its own repository and ships with AUGUR as a pillar app; AUGUR's guide to it is `docs/mandate.md` in the `augur` repository.
+Intent, passed down floor by floor: the intent pillar app. It lives in its own repository and ships with AUGUR as a pillar app; AUGUR's guide to it is `docs/mandate.md` in the `augur` repository. [`docs/mandate.md`](docs/mandate.md) here is Mandate's own guide: what people do in it, the scopes an admin allows, its events and its API.
 
 | Path | What it is |
 | --- | --- |
@@ -17,8 +17,9 @@ In `service/src`: `index.ts` starts it with the service kit's app-service starte
 - **The day before a part's back-brief-by date** (chosen when it's passed down): its holder's back-brief item says so.
 - **Once the back-brief is late:** the holder's item says so, and whoever passed it down gets a "Waiting for a back-brief" item. That item closes once the back-brief comes in.
 - **When an intent's rhythm comes round:** its holder gets "How it's going". It closes once they say.
+- **When a concern has waited two working days** (Monday to Friday) for its answer: whoever passed the part down gets a "Concerns to answer" item. It closes once the concern is answered or the part ends.
 
-A rhythm is an RFC 5545 rule without DTSTART, such as `FREQ=WEEKLY;BYDAY=MO`. It repeats at most daily and is read with `rrule`. An intent without one is asked every `rhythmDays` days (`FREQ=DAILY;INTERVAL=<days>`). Days and rules are worked out in the organisation's time zone, which comes from identity (UTC when it can't say). Each intent records what it was last reminded for (`reminded_brief_for`, `reminded_rating_for`), so nothing is sent twice. A reminder the Inbox didn't take is tried again on the next sweep.
+A rhythm is an RFC 5545 rule without DTSTART, such as `FREQ=WEEKLY;BYDAY=MO`. It repeats at most daily and is read with `rrule`. An intent without one is asked every `rhythmDays` days (`FREQ=DAILY;INTERVAL=<days>`). Days and rules are worked out in the organisation's time zone, which comes from identity (UTC when it can't say). Each intent records what it was last reminded for (`reminded_brief_for`, `reminded_rating_for`, `reminded_concern_for`), so nothing is sent twice. A reminder the Inbox didn't take is tried again on the next sweep.
 
 In `frontend/src`, Mandate is built on SDK 2 with Quill's app starter: `entry.tsx` hands `defineReactApp` the app, its places, the intents that open it (`mandate.open`, `aim.open`), the `aim.pick` picker and the Home card. `app.tsx` holds its places on the address bar (`placeRoutes`: `/`, `/yours`, `/intents/:id`) and loads with `useData`, kept per floor; `api.ts` calls the service with `createAppClient`, checked against `MandatePaths` in `service/src/api-types.ts`, where the wire types are written once.
 

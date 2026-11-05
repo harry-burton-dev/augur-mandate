@@ -80,3 +80,16 @@ export const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T0
 
 /** Whole days from one instant to another, rounded down. */
 export const daysBetween = (from: Date, to: Date) => Math.floor((to.getTime() - from.getTime()) / 86_400_000);
+
+/** Monday to Friday. AUGUR has no setting for an organisation's working week yet. */
+const working = (day: string) => ![0, 6].includes(new Date(`${day}T00:00:00Z`).getUTCDay());
+
+/** The day `n` working days after `day` (YYYY-MM-DD): raised on a Friday, two working days on is Tuesday. */
+export const addWorkingDays = (day: string, n: number) => {
+  let at = day;
+  for (let left = n; left > 0; ) {
+    at = addDays(at, 1);
+    if (working(at)) left--;
+  }
+  return at;
+};
