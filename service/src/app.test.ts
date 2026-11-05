@@ -396,6 +396,15 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect((await t.call(engMember('sam'), 'POST', `/intents/${part.id}/back-brief`, { words: 'Order from Halden by the 14th.', outcome: 'accepted' })).body.intent.life).toBe('active');
   });
 
+  it('passes a part again to a team below, moving it to that team’s floor', async () => {
+    const { sam } = await alpha(t.call);
+    await t.follow({ topic: PLATFORM_TOPICS.personLeft, payload: { person: 'sam' } });
+    expect((await t.call(engLead, 'POST', `/intents/${sam.id}/pass-again`, { to: `team:${HULL}` })).body.intent).toMatchObject({ holder: 'floor', floorName: 'Hull', life: 'passed' });
+    const hull = on('jo', { id: HULL, kind: 'team', role: 'lead' });
+    expect((await t.call(hull, 'GET', '/floor')).body.intents.map((i: { id: string }) => i.id)).toContain(sam.id);
+    expect((await t.call(hull, 'GET', `/intents/${sam.id}`)).body.can.backBrief).toBe(true);
+  });
+
   it('binds entities and documents, carries the chosen ones down, and gives other tools the context', async () => {
     const { op } = await alpha(t.call);
     const halcyon = { kind: 'entity', id: 'ent_halcyon', type: 'vessel', label: 'MV Halcyon' };

@@ -659,7 +659,8 @@ export class PgMandateStore implements MandateStore {
              briefed_parent_version, main_effort, by_date, rhythm_days, rating, rating_note, rated_at, created_by, created_by_name, passed_by, passed_by_name, passed_at,
              ended_at, ended_reason, created_at, updated_at, needs_holder, needs_holder_since, brief_by, rhythm)
            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
-           on conflict (id) do update set floor_name = excluded.floor_name, needs_holder = excluded.needs_holder, needs_holder_since = excluded.needs_holder_since,
+           on conflict (id) do update set parent_id = excluded.parent_id, root_id = excluded.root_id, ancestors = excluded.ancestors, workspace_id = excluded.workspace_id,
+             floor_principal = excluded.floor_principal, floor_kind = excluded.floor_kind, floor_name = excluded.floor_name, needs_holder = excluded.needs_holder, needs_holder_since = excluded.needs_holder_since,
              passed_by = excluded.passed_by, passed_by_name = excluded.passed_by_name, passed_at = excluded.passed_at, holder = excluded.holder, holder_name = excluded.holder_name, title = excluded.title, life = excluded.life,
              version = excluded.version, draft = excluded.draft, briefed_parent_version = excluded.briefed_parent_version, main_effort = excluded.main_effort,
              by_date = excluded.by_date, rhythm_days = excluded.rhythm_days, rating = excluded.rating, rating_note = excluded.rating_note, rated_at = excluded.rated_at,
