@@ -1,5 +1,14 @@
 # @apps/mandate
 
+## 0.2.3
+
+### Patch Changes
+
+- 7f21a10: The wire types between the frontend and the service are written once, in the service's src/api-types.ts, and both sides use them. Types only: the frontend bundle and the service build don't change.
+- 89e9952: The manifest's SDK range also accepts SDK 2. SDK 2 only stops serving Lit, which this app never used, so the
+  app keeps opening when a deployment moves to an AUGUR shell built on SDK 2.
+- 40ce223: The service stays up when Postgres restarts or drops an idle connection: its database pools log the lost connection (the service kit's `steadyPool`) instead of ending the process (PER-207).
+
 ## 0.2.2
 
 ### Patch Changes
