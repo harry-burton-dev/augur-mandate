@@ -3,6 +3,8 @@ import { appCredentialsFromEnv, recordAudit } from '@augur/service-kit';
 /** Something Mandate puts in the platform's audit log: who did what to which intent, on which floor. */
 export interface MandateAuditEntry {
   actor: string;
+  /** Mandate did it itself, following an event, rather than a person. */
+  service?: boolean;
   action: string;
   target: string;
   workspace: string;
@@ -19,6 +21,6 @@ export const auditFromEnv = (log: (entry: MandateAuditEntry) => void, env = proc
   const credentials = appCredentialsFromEnv('mandate', env);
   const eventsUrl = env.EVENTS_URL;
   if (!eventsUrl || !credentials) return async (entry) => log(entry);
-  return ({ actor, action, target, workspace, detail }) =>
-    recordAudit({ eventsUrl, credentials, workspace, entry: { actor: { id: actor, kind: 'user' }, app: 'mandate', action, target, ...(detail ? { detail } : {}) } });
+  return ({ actor, service, action, target, workspace, detail }) =>
+    recordAudit({ eventsUrl, credentials, workspace, entry: { actor: { id: actor, kind: service ? 'service' : 'user' }, app: 'mandate', action, target, ...(detail ? { detail } : {}) } });
 };

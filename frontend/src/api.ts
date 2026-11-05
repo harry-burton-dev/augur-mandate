@@ -15,6 +15,7 @@ export type {
   FloorKind,
   HomeGlance,
   Life,
+  NeedsHolder,
   Rating,
   Rights,
   Statement,
@@ -87,6 +88,9 @@ export class MandateApi {
   }
   targets(id: string, q: string) {
     return asked(this.client.get('/intents/{id}/targets', { params: { id }, query: { q } }));
+  }
+  passAgain(id: string, to: string) {
+    return asked(this.client.post('/intents/{id}/pass-again', { params: { id }, body: { to } }));
   }
   pass(id: string, part: PassBody) {
     return asked(this.client.post('/intents/{id}/pass', { params: { id }, body: part }));

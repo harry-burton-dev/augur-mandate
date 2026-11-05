@@ -1,7 +1,8 @@
-import { callerCheckFor, callerHeaders, callerSigner, signedCallerHeaders, type CallerWorkspace, type NewInboxItem } from '@augur/service-kit';
+import { callerCheckFor, callerHeaders, callerSigner, PLATFORM_TOPICS, signedCallerHeaders, type CallerWorkspace, type NewInboxItem } from '@augur/service-kit';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.ts';
+import { ATLAS_TOPICS, makeFollower } from './follow.ts';
 import type { MandateNotice } from './notices.ts';
 import type { People } from './people.ts';
 import { MemoryMandateStore, PgMandateStore, TOPICS, type MandateStore, type OutboxEvent } from './store.ts';
@@ -50,13 +51,18 @@ const setup = async (store: MandateStore, outbox: () => Promise<OutboxEvent[]>) 
   // The shell's Inbox, as Mandate puts work there: each item by key, as it stands.
   const inbox = new Map<string, { workspace: string; item: NewInboxItem; state: 'open' | 'done' | 'withdrawn' }>();
   let clock = Date.parse('2026-10-27T09:00:00Z');
-  const app = await buildApp({ store, people, notify: async (n) => void notices.push(n), inbox: { put: async (key, workspace, item) => void inbox.set(key, { workspace, item, state: 'open' }), close: async (key, state) => void (inbox.has(key) && (inbox.get(key)!.state = state)) }, audit: async () => {}, now: () => new Date((clock += 1000)) });
+  const work = { put: async (key: string, workspace: string, item: NewInboxItem) => void inbox.set(key, { workspace, item, state: 'open' }), close: async (key: string, state: 'done' | 'withdrawn') => void (inbox.has(key) && (inbox.get(key)!.state = state)) };
+  const notify = async (n: MandateNotice) => void notices.push(n);
+  const now = () => new Date((clock += 1000));
+  const app = await buildApp({ store, people, notify, inbox: work, audit: async () => {}, now });
+  // What Mandate does with the events it follows, over the same store.
+  const follow = makeFollower({ app: { id: 'mandate', name: 'Mandate' }, store, people, notify, inbox: work, audit: async () => {}, now });
   const call = async (headers: Record<string, string>, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: unknown) => {
     const res = await app.inject({ method, url: `/v1${url}`, headers, ...(payload !== undefined ? { payload: payload as object } : {}) });
     return { status: res.statusCode, body: res.body ? res.json() : undefined };
   };
   const later = (days: number) => (clock += days * 24 * 60 * 60 * 1000);
-  return { app, store, notices, inbox, call, later, outbox };
+  return { app, store, notices, inbox, call, later, outbox, follow };
 };
 
 /** Operation Alpha on the org floor, issued, with Engineering's part accepted and Sam's part under that. */
@@ -267,6 +273,73 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect((await t.call(engLead, 'POST', `/intents/${eng.id}/main-effort`, { on: true })).status).toBe(403);
   });
 
+  it('asks whoever passed a part down to pass it again when its holder leaves, and gives it back if they return', async () => {
+    const { sam } = await alpha(t.call);
+    await t.follow({ topic: PLATFORM_TOPICS.personDisabled, payload: { person: 'sam' } });
+    // Twice does no harm: the reason and date stay the first.
+    await t.follow({ topic: PLATFORM_TOPICS.personDisabled, payload: { person: 'sam' } });
+    const part = (await t.call(engLead, 'GET', `/intents/${sam.id}`)).body;
+    expect(part.intent).toMatchObject({ holder: 'person:sam', holderName: 'Sam Patel', needsHolder: { why: 'disabled' } });
+    expect(part.can.passAgain).toBe(true);
+    expect(t.inbox.get(`needs-holder/${sam.id}`)).toMatchObject({ state: 'open', item: { kind: 'needs-holder', owner: { kind: 'person', id: 'dana' } } });
+    expect(t.notices.filter((n) => n.title.includes('needs a holder'))).toHaveLength(1);
+    expect((await t.outbox()).filter((e) => e.topic === TOPICS.needsHolder)).toHaveLength(1);
+    // Signed back in before anyone else took it on: it's theirs again.
+    await t.follow({ topic: PLATFORM_TOPICS.personEnabled, payload: { person: 'sam' } });
+    expect((await t.call(engLead, 'GET', `/intents/${sam.id}`)).body.intent.needsHolder).toBeUndefined();
+    expect(t.inbox.get(`needs-holder/${sam.id}`)?.state).toBe('withdrawn');
+  });
+
+  it('passes a part again to someone new, who says it back before it’s under way', async () => {
+    const { sam } = await alpha(t.call);
+    expect((await t.call(engLead, 'POST', `/intents/${sam.id}/pass-again`, { to: 'person:dana' })).body.error).toBe('not-now');
+    await t.follow({ topic: PLATFORM_TOPICS.personLeft, payload: { person: 'sam', handOverTo: 'dana' } });
+    expect(t.inbox.get(`needs-holder/${sam.id}`)?.item.detail).toContain('They handed their work over to Dana Ross.');
+    // Only whoever passed it down, or a lead of the floor above.
+    expect((await t.call(engMember('sam'), 'POST', `/intents/${sam.id}/pass-again`, { to: 'person:dana' })).status).toBe(403);
+    expect((await t.call(engLead, 'POST', `/intents/${sam.id}/pass-again`, { to: 'person:priya' })).body.error).toBe('bad-target');
+    const again = (await t.call(engLead, 'POST', `/intents/${sam.id}/pass-again`, { to: 'person:dana' })).body;
+    expect(again.intent).toMatchObject({ holder: 'person:dana', life: 'passed' });
+    expect(again.intent.needsHolder).toBeUndefined();
+    expect(t.inbox.get(`needs-holder/${sam.id}`)?.state).toBe('done');
+    expect(t.inbox.get(`back-brief/${sam.id}`)).toMatchObject({ state: 'open', item: { owner: { kind: 'person', id: 'dana' } } });
+    expect(again.statement.purpose).toBe('');
+  });
+
+  it('marks only the parts on a team’s floor when someone leaves that team, and follows the team’s new name', async () => {
+    const { eng, sam } = await alpha(t.call);
+    const board = (await t.call(orgLead, 'POST', `/intents/${(await alpha(t.call)).op.id}/pass`, { to: 'person:sam', title: 'Brief the board' })).body;
+    await t.follow({ topic: PLATFORM_TOPICS.memberRemoved, payload: { team: ENG, person: 'sam' } });
+    expect((await t.call(engLead, 'GET', `/intents/${sam.id}`)).body.intent.needsHolder).toMatchObject({ why: 'removed' });
+    expect((await t.call(orgLead, 'GET', `/intents/${board.id}`)).body.intent.needsHolder).toBeUndefined();
+    await t.follow({ topic: PLATFORM_TOPICS.teamRenamed, payload: { team: ENG, name: 'Marine Engineering' } });
+    expect((await t.call(engLead, 'GET', `/intents/${eng.id}`)).body.intent).toMatchObject({ floorName: 'Marine Engineering', holderName: 'Marine Engineering' });
+  });
+
+  it('shows entities Data Atlas retired, and moves bindings to the survivor of a merge and back when it’s split', async () => {
+    const { eng, sam } = await alpha(t.call);
+    const ship = (id: string, label: string) => ({ kind: 'entity', id, type: 'vessel', label });
+    await t.call(engLead, 'POST', `/intents/${eng.id}/entities`, { entity: ship('ent_old', 'MV Halcyon'), role: 'subject' });
+    await t.call(engLead, 'POST', `/intents/${eng.id}/entities`, { entity: ship('ent_new', 'Halcyon'), role: 'subject' });
+    await t.call(engMember('sam'), 'POST', `/intents/${sam.id}/entities`, { entity: ship('ent_old', 'MV Halcyon'), role: 'subject' });
+    await t.follow({ topic: ATLAS_TOPICS.retired, payload: { entity: 'ent_new', type: 'vessel' } });
+    expect((await t.call(engLead, 'GET', `/intents/${eng.id}`)).body.entities.find((e: { entity: { id: string } }) => e.entity.id === 'ent_new').state).toBe('retired');
+
+    const before = (await t.outbox()).length;
+    await t.follow({ topic: ATLAS_TOPICS.merged, payload: { entity: 'ent_old', into: 'ent_new', merge: 'm1', type: 'vessel' } });
+    await t.follow({ topic: ATLAS_TOPICS.merged, payload: { entity: 'ent_old', into: 'ent_new', merge: 'm1', type: 'vessel' } });
+    // Sam's part now points at the survivor; Engineering's was bound to it already, so it shows once.
+    expect((await t.call(engMember('sam'), 'GET', `/intents/${sam.id}`)).body.entities).toMatchObject([{ entity: { id: 'ent_new', label: 'MV Halcyon' }, mergedFrom: 'ent_old' }]);
+    expect((await t.call(engLead, 'GET', `/intents/${eng.id}`)).body.entities.map((e: { entity: { id: string } }) => e.entity.id)).toEqual(['ent_new']);
+    expect((await t.outbox()).slice(before).map((e) => `${e.topic} ${e.payload.intent} ${e.payload.entity}`).sort()).toEqual(
+      [`${TOPICS.entityUnbound} ${eng.id} ent_old`, `${TOPICS.entityBound} ${sam.id} ent_new`, `${TOPICS.entityUnbound} ${sam.id} ent_old`].sort(),
+    );
+
+    await t.follow({ topic: ATLAS_TOPICS.split, payload: { entity: 'ent_old', from: 'ent_new', merge: 'm1', type: 'vessel' } });
+    expect((await t.call(engMember('sam'), 'GET', `/intents/${sam.id}`)).body.entities).toMatchObject([{ entity: { id: 'ent_old' } }]);
+    expect((await t.call(engLead, 'GET', `/intents/${eng.id}`)).body.entities.map((e: { entity: { id: string } }) => e.entity.id).sort()).toEqual(['ent_new', 'ent_old']);
+  });
+
   it('binds entities and documents, carries the chosen ones down, and gives other tools the context', async () => {
     const { op } = await alpha(t.call);
     const halcyon = { kind: 'entity', id: 'ent_halcyon', type: 'vessel', label: 'MV Halcyon' };
@@ -322,7 +395,7 @@ describe.runIf(process.env.DATABASE_URL)('mandate on Postgres', () => {
     await admin.end();
   });
   behaves(async () => {
-    await admin.query('truncate mandate.outbox, mandate.entity_bindings, mandate.document_bindings, mandate.assessments, mandate.back_briefs, mandate.versions, mandate.intents');
+    await admin.query('truncate mandate.event_cursor, mandate.outbox, mandate.entity_bindings, mandate.document_bindings, mandate.assessments, mandate.back_briefs, mandate.versions, mandate.intents');
     return {
       store,
       outbox: async () => (await admin.query('select topic, workspace_id as workspace, payload from mandate.outbox order by id')).rows,

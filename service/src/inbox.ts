@@ -13,10 +13,13 @@ export interface MandateInbox {
 }
 
 /** The kinds Mandate declares in its manifest's `inbox.kinds`. */
-export const INBOX_KINDS = { backBrief: 'back-brief' } as const;
+export const INBOX_KINDS = { backBrief: 'back-brief', needsHolder: 'needs-holder' } as const;
 
 /** The key of a part's back-brief item. */
 export const backBriefKey = (intent: string) => `back-brief/${intent}`;
+
+/** The key of the item that asks whoever passed a part down to pass it again, once its holder can't hold it. */
+export const needsHolderKey = (intent: string) => `needs-holder/${intent}`;
 
 /**
  * Puts work in people's inboxes as Mandate (the `inbox:write` scope), or, with no EVENTS_URL or

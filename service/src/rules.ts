@@ -73,6 +73,9 @@ export const assessmentDue = (i: Intent, now = Date.now()) =>
 /** What the viewer may do with an intent they see in full, so the app only offers what will work (see `api-types.ts`). */
 export type { Rights };
 
+/** A lead standing on an intent's own floor: who can act for it when whoever passed a part down can't. */
+const leadOn = (v: Viewer, i: Intent) => i.floorKind !== 'personal' && v.workspace.id === i.workspace && v.workspace.role === 'lead';
+
 export const rightsOn = (v: Viewer, i: Intent, parent: Intent | undefined): Rights => {
   const holder = holds(v, i) && !ended(i);
   const giver = (parent ? holds(v, parent) : holds(v, i)) && !ended(i);
@@ -85,6 +88,7 @@ export const rightsOn = (v: Viewer, i: Intent, parent: Intent | undefined): Righ
     achieve: giver && i.life === 'active',
     withdraw: giver,
     mainEffort: Boolean(parent) && giver && !ended(i),
+    passAgain: Boolean(parent && i.needsHolder) && !ended(i) && (giver || i.passedBy === v.id || leadOn(v, parent!)),
   };
 };
 
