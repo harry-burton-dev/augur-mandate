@@ -1,4 +1,4 @@
-import { callerCheckFor, callerHeaders, callerSigner, signedCallerHeaders, type CallerWorkspace } from '@augur/service-kit';
+import { callerCheckFor, callerHeaders, callerSigner, signedCallerHeaders, type CallerWorkspace, type NewInboxItem } from '@augur/service-kit';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.ts';
@@ -47,14 +47,16 @@ const own = (p: string) => on(p, { id: `w-${p}`, kind: 'personal', role: 'lead' 
 
 const setup = async (store: MandateStore, outbox: () => Promise<OutboxEvent[]>) => {
   const notices: MandateNotice[] = [];
+  // The shell's Inbox, as Mandate puts work there: each item by key, as it stands.
+  const inbox = new Map<string, { workspace: string; item: NewInboxItem; state: 'open' | 'done' | 'withdrawn' }>();
   let clock = Date.parse('2026-10-27T09:00:00Z');
-  const app = await buildApp({ store, people, notify: async (n) => void notices.push(n), audit: async () => {}, now: () => new Date((clock += 1000)) });
+  const app = await buildApp({ store, people, notify: async (n) => void notices.push(n), inbox: { put: async (key, workspace, item) => void inbox.set(key, { workspace, item, state: 'open' }), close: async (key, state) => void (inbox.has(key) && (inbox.get(key)!.state = state)) }, audit: async () => {}, now: () => new Date((clock += 1000)) });
   const call = async (headers: Record<string, string>, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: unknown) => {
     const res = await app.inject({ method, url: `/v1${url}`, headers, ...(payload !== undefined ? { payload: payload as object } : {}) });
     return { status: res.statusCode, body: res.body ? res.json() : undefined };
   };
   const later = (days: number) => (clock += days * 24 * 60 * 60 * 1000);
-  return { app, store, notices, call, later, outbox };
+  return { app, store, notices, inbox, call, later, outbox };
 };
 
 /** Operation Alpha on the org floor, issued, with Engineering's part accepted and Sam's part under that. */
@@ -176,6 +178,24 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect(await find(own('sam'))).toEqual(['Refit Halcyon’s port shaft', 'Keep Halcyon and Corran at sea']);
     expect(await find(orgMember('priya'))).toEqual([]);
     void log;
+  });
+
+  it('puts a part’s back-brief in the Inbox of whoever holds it, and closes it once it’s said back or no longer needed', async () => {
+    const { op, eng, sam } = await alpha(t.call);
+    // Engineering's waited on its leads, Sam's on Sam; both said back, so both are done.
+    expect(t.inbox.get(`back-brief/${eng.id}`)).toMatchObject({ workspace: ENG, state: 'done', item: { kind: 'back-brief', owner: { kind: 'team', id: ENG, role: 'lead' }, title: 'Keep Halcyon and Corran at sea', path: `/intents/${eng.id}`, from: 'okafor', allow: { decline: false, handOn: false } } });
+    expect(t.inbox.get(`back-brief/${sam.id}`)).toMatchObject({ state: 'done', item: { owner: { kind: 'person', id: 'sam' }, subject: { kind: 'ref', app: 'mandate', type: 'intent', id: sam.id } } });
+    // Revised above: Engineering's opens again, to say whether theirs still stands.
+    await t.call(orgLead, 'PATCH', `/intents/${op.id}`, { statement: { endState: 'Three ships on station.' } });
+    await t.call(orgLead, 'POST', `/intents/${op.id}/issue`);
+    expect(t.inbox.get(`back-brief/${eng.id}`)).toMatchObject({ state: 'open', item: { reopen: true } });
+    // A new part not yet said back is taken back when the operation is withdrawn.
+    const log = (await t.call(orgLead, 'POST', `/intents/${op.id}/pass`, { to: `team:${LOG}`, title: 'Stock Port Ardel' })).body;
+    expect(t.inbox.get(`back-brief/${log.id}`)?.state).toBe('open');
+    await t.call(orgLead, 'POST', `/intents/${op.id}/withdraw`, { reason: 'Route closed for winter' });
+    expect(t.inbox.get(`back-brief/${log.id}`)?.state).toBe('withdrawn');
+    expect(t.inbox.get(`back-brief/${eng.id}`)?.state).toBe('withdrawn');
+    expect(t.inbox.get(`back-brief/${sam.id}`)?.state).toBe('done');
   });
 
   it('asks the parts below to confirm their back-brief when the intent above is revised', async () => {

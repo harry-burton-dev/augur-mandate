@@ -37,8 +37,18 @@
     "audit:write",
     "people:read",
     "notifications:send",
-    "events:publish"
+    "events:publish",
+    "inbox:write"
   ],
+  "inbox": {
+    "kinds": [
+      {
+        "id": "back-brief",
+        "label": "To say back",
+        "icon": "compass"
+      }
+    ]
+  },
   "handles": [
     "aim.open",
     "aim.pick",
