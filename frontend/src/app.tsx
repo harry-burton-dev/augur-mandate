@@ -61,6 +61,7 @@ import {
   type Summary,
   type Target,
 } from './api.js';
+import { BRIEF_BY_QUICK, briefByDefault, briefWords } from './reminders.js';
 
 /** How a summary's state reads, as a mark and a word: where it is in its life, else how its holder judges it. */
 export const markOf = (i: Pick<Summary, 'life' | 'rating' | 'needsHolder'>): { status: StatusName; label: string } => {
@@ -283,7 +284,7 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
         statusLabel={mark.label}
         floorKind={i.floorKind}
         floorName={i.floorName}
-        meta={[i.partOf ? `Part of ${i.partOf}` : '', holderWords(i), i.byDate ? `By ${dayName(i.byDate)}` : ''].filter(Boolean)}
+        meta={[i.partOf ? `Part of ${i.partOf}` : '', holderWords(i), briefWords(i), i.byDate ? `By ${dayName(i.byDate)}` : ''].filter(Boolean)}
         note={i.ratingNote}
         noteTone={i.rating === 'blocked' ? 'danger' : i.rating === 'at_risk' ? 'warning' : 'ink'}
         onOpen={() => go({ view: 'intent', id: i.id })}
@@ -354,7 +355,7 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
       title: i.title,
       detail,
       status,
-      ...(i.byDate ? { meta: `By ${dayName(i.byDate)}` } : {}),
+      ...(briefWords(i) ? { meta: briefWords(i) } : i.byDate ? { meta: `By ${dayName(i.byDate)}` } : {}),
     });
     const items: ListItem[] = [
       ...yours.passed.map((i) => ({
@@ -592,6 +593,7 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
       d.passed ? `passed down by ${d.passed.by}` : '',
       d.issued ? `version ${d.issued.version}, issued ${relativeTime(d.issued.at)}` : 'not issued yet',
       intent.byDate ? `by ${dayName(intent.byDate)}` : '',
+      briefWords(intent).replace(/^B/, 'b'),
     ].filter(Boolean);
     // Ready to issue once the draft says why and what done looks like.
     const draft = d.draft ?? d.statement;
@@ -737,6 +739,7 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
       title: values.title ?? '',
       ...(values.purpose?.trim() ? { purpose: values.purpose } : {}),
       ...(values.byDate?.trim() ? { byDate: values.byDate.trim() } : {}),
+      ...(values.briefBy?.trim() ? { briefBy: values.briefBy.trim() } : {}),
       carry: {
         entities: carry.filter((c) => c.startsWith('e|')).map((c) => c.slice(2)),
         documents: carry.filter((c) => c.startsWith('d|')).map((c) => c.slice(2)),
@@ -893,6 +896,15 @@ export function MandateApp({ ctx }: AppProps<MountContext>) {
                 <TextField name="title" label="Their part" hint="What they’re to achieve, in a line." required maxLength={140} />
                 <Editor name="purpose" label="Why it matters to the whole" optional rows={2} guide="2 sentences" />
                 <DateField name="byDate" label="Done by" optional empty="No date" />
+                <DateField
+                  name="briefBy"
+                  label="Back-brief by"
+                  hint="They’re reminded the day before, and you’re told if it’s late."
+                  optional
+                  empty="No date"
+                  quick={BRIEF_BY_QUICK}
+                  defaultValue={briefByDefault()}
+                />
                 {options.length ? (
                   <CheckboxGroup label="Carry down" hint="What their part starts bound to." optional value={carry} onChange={setCarry}>
                     {options.map((o) => (

@@ -5,6 +5,9 @@ import { FOLLOWED, makeFollower } from './follow.ts';
 import { inboxFromEnv } from './inbox.ts';
 import { notifyFromEnv } from './notices.ts';
 import { peopleFromEnv } from './people.ts';
+import { organisationZoneFromEnv } from './reminders/organisation.ts';
+import { MemoryReminderStore, PgReminderStore } from './reminders/store.ts';
+import { scheduleReminders } from './reminders/sweep.ts';
 import { MemoryMandateStore, PgMandateStore } from './store.ts';
 
 const manifest = readManifest(import.meta.url);
@@ -31,6 +34,15 @@ const store = databaseUrl ? await PgMandateStore.connect(databaseUrl) : new Memo
 const app = await startAppService({
   manifest,
   buildApp: () => buildApp({ manifest, store }),
+  // Reminders on time (ADR 0061): a sweep every 15 minutes. Without a database jobs don't run on a schedule.
+  jobs: (jobs, built) =>
+    void scheduleReminders(jobs, {
+      app: manifest.id,
+      store: databaseUrl ? PgReminderStore.connect(databaseUrl) : new MemoryReminderStore(store as MemoryMandateStore),
+      inbox: inboxFromEnv((what) => built.log.info({ inbox: what }, 'inbox item (no inbox here)')),
+      zone: organisationZoneFromEnv({ onError: (err) => built.log.warn({ err: err.message }, 'the organisation’s time zone could not be read; reminders use the last one known, else UTC') }),
+      log: built.log,
+    }),
 });
 
 // Tell other apps what happened (mandate.intent.*), from the outbox, once each change has committed.

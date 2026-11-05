@@ -355,3 +355,26 @@ export interface MandatePaths {
   '/intents/{id}/documents': { post: Call<Detail, { path: ById; body: AddDocumentBody }> };
   '/intents/{id}/documents/{app}/{doc}': { delete: Call<Detail, { path: ById & { app: string; doc: string } }> };
 }
+
+// Reminders on time (ADR 0061): the back-brief-by date and the rhythm as a rule. Kept in one block,
+// merged into the shapes above.
+
+export interface Summary {
+  /** When a part passed down should be back-briefed by (YYYY-MM-DD). */
+  briefBy?: string;
+}
+
+export interface Detail {
+  /** How often its holder is asked how it's going: an RFC 5545 RRULE, without DTSTART. */
+  rhythm: string;
+}
+
+export interface EditBody {
+  /** A rule such as FREQ=WEEKLY;BYDAY=MO, repeating at most daily; null goes back to every `rhythmDays` days. */
+  rhythm?: string | null;
+}
+
+export interface PassBody {
+  /** When to back-brief it by (YYYY-MM-DD); reminded the day before, and when it's late. */
+  briefBy?: string;
+}

@@ -51,7 +51,7 @@ const setup = async (store: MandateStore, outbox: () => Promise<OutboxEvent[]>) 
   // The shell's Inbox, as Mandate puts work there: each item by key, as it stands.
   const inbox = new Map<string, { workspace: string; item: NewInboxItem; state: 'open' | 'done' | 'withdrawn' }>();
   let clock = Date.parse('2026-10-27T09:00:00Z');
-  const work = { put: async (key: string, workspace: string, item: NewInboxItem) => void inbox.set(key, { workspace, item, state: 'open' }), close: async (key: string, state: 'done' | 'withdrawn') => void (inbox.has(key) && (inbox.get(key)!.state = state)) };
+  const work = { put: async (key: string, workspace: string, item: NewInboxItem) => void inbox.set(key, { workspace, item, state: 'open' }), close: async (key: string, state: 'done' | 'withdrawn') => void (inbox.has(key) && (inbox.get(key)!.state = state)), change: async () => {} };
   const notify = async (n: MandateNotice) => void notices.push(n);
   const now = () => new Date((clock += 1000));
   const app = await buildApp({ store, people, notify, inbox: work, audit: async () => {}, now });
