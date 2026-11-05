@@ -24,6 +24,7 @@ import type {
   Floor,
   HomeGlance,
   MainEffortBody,
+  PassAgainBody,
   PassBody,
   Rights,
   SearchResults,
@@ -33,7 +34,8 @@ import type {
   Yours,
 } from './api-types.ts';
 import { auditFromEnv, type Audit } from './audit.ts';
-import { backBriefKey, INBOX_KINDS, inboxFromEnv, type MandateInbox } from './inbox.ts';
+import { bindingOutbox } from './follow.ts';
+import { backBriefKey, INBOX_KINDS, inboxFromEnv, needsHolderKey, type MandateInbox } from './inbox.ts';
 import { notifyFromEnv, type Notify } from './notices.ts';
 import { floorPrincipal, peopleFromEnv, type People } from './people.ts';
 import { RULE_MAX, ruleOf, ruleProblem, tidyRule } from './reminders/rules.ts';
@@ -41,6 +43,7 @@ import { assessmentDue, ended, maySet, needsRecheck, rightsOn, sightOf, type Sig
 import {
   ConflictError,
   EMPTY_STATEMENT,
+  ENDED,
   MemoryMandateStore,
   newId,
   RATINGS,
@@ -94,6 +97,7 @@ const summaryOf = (i: Intent, sight: Sight): Summary => ({
   ...(i.briefBy ? { briefBy: i.briefBy } : {}),
   ...(sight === 'full' && i.rating ? { rating: i.rating, ...(i.ratingNote ? { ratingNote: i.ratingNote } : {}), ...(i.ratedAt ? { ratedAt: i.ratedAt } : {}) } : {}),
   ...(sight === 'summary' && i.rating ? { rating: i.rating } : {}),
+  ...(i.needsHolder && !ENDED.includes(i.life) ? { needsHolder: i.needsHolder } : {}),
   sight,
 });
 
@@ -222,6 +226,8 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
 
   const stamp = () => now().toISOString();
   const event = (topic: string, i: Intent, payload: Record<string, unknown> = {}): OutboxEvent => ({ topic, workspace: i.workspace, payload: { intent: i.id, ...payload } });
+  /** A binding made or taken away, told in ADR 0066's shape. */
+  const bindingTold = (i: Intent, entity: string, role: string, change: 'bound' | 'unbound') => bindingOutbox(manifest.id, { intent: i.id, entity, role }, change, i.workspace);
 
   /** Writes a change, or says someone else changed it first. */
   const commit = async (change: Change, reply: FastifyReply) => {
@@ -266,7 +272,14 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
       below: branchesBelow(intent.id, tree, sight),
       backBriefs,
       assessments,
-      entities: entities.map(({ entity, role, inheritedFrom, at }) => ({ entity, role, ...(inheritedFrom ? { from: byId.get(inheritedFrom)?.title ?? '' } : {}), at })),
+      entities: entities.map(({ entity, role, inheritedFrom, at, state, mergedFrom }) => ({
+        entity,
+        role,
+        ...(inheritedFrom ? { from: byId.get(inheritedFrom)?.title ?? '' } : {}),
+        at,
+        ...(state === 'retired' ? { state } : {}),
+        ...(mergedFrom ? { mergedFrom } : {}),
+      })),
       documents: documents.map(({ document, inheritedFrom, at }) => ({ document, ...(inheritedFrom ? { from: byId.get(inheritedFrom)?.title ?? '' } : {}), at })),
       recheck: needsRecheck(intent, parent),
       assessmentDue: holdsNow(v, intent) && assessmentDue(intent, now().getTime()),
@@ -496,6 +509,22 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
         return principals.includes(`team:${i.workspace}`);
       };
 
+      const BAD_TARGET = 'Pass a part to a team directly below this floor, or to someone on it.';
+      type Place = Pick<Intent, 'workspace' | 'floor' | 'floorKind' | 'floorName' | 'holder' | 'holderName'>;
+      /** Where a part of `intent` passed `to` someone sits: a team directly below its floor, or a person on it. Undefined when it can't go there. */
+      const placeFor = async (v: Viewer, intent: Intent, to: string): Promise<Place | undefined> => {
+        const [kind, target] = to.split(':') as ['team' | 'person', string];
+        if (kind === 'team') {
+          const team = (await people.directory({ ids: [target] })).teams.find((t) => t.id === target);
+          if (!team || !directlyBelow(intent, team.path)) return undefined;
+          return { workspace: team.id, floor: `tree:${team.id}`, floorKind: 'team', floorName: team.name, holder: 'floor', holderName: team.name };
+        }
+        const name = target === v.id ? v.name : (await people.directory({ ids: [target] })).people.find((p) => p.id === target)?.name;
+        if (!name || (target !== v.id && !(await onFloorOfIntent(target, intent)))) return undefined;
+        return { workspace: intent.workspace, floor: intent.floor, floorKind: intent.floorKind, floorName: intent.floorName, holder: `person:${target}`, holderName: name };
+      };
+      const TO = { type: 'string', pattern: '^(team|person):[^\\s:]{1,64}$' } as const;
+
       /** Passes part of an intent down: to a team directly below its floor, or a person on it. They back-brief it before it's under way. */
       app.post<{ Params: { id: string }; Body: PassBody }>(
         '/intents/:id/pass',
@@ -507,7 +536,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
               additionalProperties: false,
               required: ['to', 'title'],
               properties: {
-                to: { type: 'string', pattern: '^(team|person):[^\\s:]{1,64}$' },
+                to: TO,
                 title: TITLE,
                 purpose: TEXT(2000),
                 byDate: DATE,
@@ -525,18 +554,9 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
           const { intent } = loaded;
           if (!loaded.can.pass) return refuse(reply, 'Only whoever holds this intent can pass part of it down, once it’s issued.');
           if (intent.ancestors.length + 1 >= MAX_DEPTH) return unfit(reply, `Intent nests at most ${MAX_DEPTH} deep.`);
-          const [kind, target] = req.body.to.split(':') as ['team' | 'person', string];
-          let place: Pick<Intent, 'workspace' | 'floor' | 'floorKind' | 'floorName' | 'holder' | 'holderName'>;
-          if (kind === 'team') {
-            const team = (await people.directory({ ids: [target] })).teams.find((t) => t.id === target);
-            if (!team || !directlyBelow(intent, team.path)) return sendProblem(reply, 400, 'bad-target', 'Pass a part to a team directly below this floor, or to someone on it.');
-            place = { workspace: team.id, floor: `tree:${team.id}`, floorKind: 'team', floorName: team.name, holder: 'floor', holderName: team.name };
-          } else {
-            const name = target === v.id ? v.name : (await people.directory({ ids: [target] })).people.find((p) => p.id === target)?.name;
-            if (!name || (target !== v.id && !(await onFloorOfIntent(target, intent))))
-              return sendProblem(reply, 400, 'bad-target', 'Pass a part to a team directly below this floor, or to someone on it.');
-            place = { workspace: intent.workspace, floor: intent.floor, floorKind: intent.floorKind, floorName: intent.floorName, holder: `person:${target}`, holderName: name };
-          }
+          const kind = req.body.to.startsWith('team:') ? 'team' : 'person';
+          const place = await placeFor(v, intent, req.body.to);
+          if (!place) return sendProblem(reply, 400, 'bad-target', BAD_TARGET);
           const at = stamp();
           const id = newId();
           const part: Intent = {
@@ -578,7 +598,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
             documentBindings: carriedDocuments,
             events: [
               event(TOPICS.passed, part, { parent: intent.id, to: req.body.to }),
-              ...carriedEntities.map((b) => event(TOPICS.entityBound, part, { entity: b.entity.id, role: b.role })),
+              ...carriedEntities.map((b) => bindingTold(part, b.entity.id, b.role, 'bound')),
             ],
           });
           await recorded({ actor: v.id, action: 'intent.passed', target: id, workspace: part.workspace, detail: { title: part.title, parent: intent.id, to: req.body.to } });
@@ -592,6 +612,44 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
           });
           await waiting(backBriefKey(id), part.workspace, backBriefItem(part, `Part of ${intent.title}. Say it back in your own words to accept it.`, v.id));
           return reply.code(201).send(summaryOf(part, 'full'));
+        },
+      );
+
+      /**
+       * Passes a part whose holder can no longer hold it to someone new, as the first pass could have:
+       * a team directly below the floor above, or a person on it. Its statement and bindings stay; the new
+       * holder says it back before it's under way again.
+       */
+      app.post<{ Params: { id: string }; Body: PassAgainBody }>(
+        '/intents/:id/pass-again',
+        { schema: { params: ID_PARAMS, body: { type: 'object', additionalProperties: false, required: ['to'], properties: { to: TO } } } },
+        async (req, reply) => {
+          const v = await viewerOf(req, reply);
+          if (!v) return reply;
+          const loaded = await load(v, req.params.id, reply);
+          if (!loaded) return reply;
+          const { intent, parent } = loaded;
+          if (!loaded.can.passAgain || !parent)
+            return intent.needsHolder ? refuse(reply, 'Whoever passed this down, or a lead of the floor above, passes it again.') : unfit(reply, 'It still has a holder: only a part whose holder can no longer hold it is passed again.');
+          const place = await placeFor(v, parent, req.body.to);
+          if (!place) return sendProblem(reply, 400, 'bad-target', BAD_TARGET);
+          const at = stamp();
+          const { needsHolder: _, briefedParentVersion: __, ...rest } = intent;
+          const next: Intent = { ...rest, ...place, life: 'passed', passedBy: v.id, passedByName: v.name, passedAt: at, updatedAt: at };
+          await store.commit({ intents: [next], events: [event(TOPICS.passed, next, { parent: parent.id, to: req.body.to, again: true })] });
+          await recorded({ actor: v.id, action: 'intent.passed-again', target: intent.id, workspace: next.workspace, detail: { title: intent.title, from: intent.holder, to: req.body.to } });
+          await settled(needsHolderKey(intent.id), 'done');
+          await told({
+            recipients: (await holdersOf(next)).filter((p) => p !== v.id),
+            workspace: next.workspace,
+            title: `${v.name} passed you “${next.title}”`,
+            detail: `Part of ${parent.title}, held before by ${intent.holderName}. Say it back in your own words to accept it.`,
+            needsYou: true,
+            link: `/intents/${next.id}`,
+          });
+          await waiting(backBriefKey(next.id), next.workspace, backBriefItem(next, `Part of ${parent.title}. Say it back in your own words to accept it.`, v.id, true));
+          const tree = loaded.tree.map((d) => (d.id === next.id ? next : d));
+          return detailOf(v, { ...loaded, intent: next, tree, can: rightsOn(v, next, parent) });
         },
       );
 
@@ -696,6 +754,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
         await recorded({ actor: v.id, action: `intent.${life}`, target: intent.id, workspace: intent.workspace, detail: { title: intent.title, ...(reason ? { reason } : {}), parts: parts.length } });
         // A back-brief still waiting has nothing left to say back to.
         for (const d of [intent, ...below]) if (d.life === 'passed' || needsRecheck(d, d.parent ? loaded.byId.get(d.parent) : undefined)) await settled(backBriefKey(d.id), 'withdrawn');
+        for (const d of [intent, ...below]) if (d.needsHolder) await settled(needsHolderKey(d.id), 'withdrawn');
         for (const i of [intent, ...below]) {
           const recipients = (await holdersOf(i)).filter((p) => p !== v.id);
           await told({ recipients, workspace: i.workspace, title: `${i === intent ? i.title : intent.title} was ${life === 'achieved' ? 'achieved' : 'withdrawn'}`, ...(i !== intent ? { detail: `So “${i.title}” is closed.` } : reason ? { detail: reason } : {}), link: `/intents/${i.id}` });
@@ -757,7 +816,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
           const { kind, id, type, label } = req.body.entity;
           await store.commit({
             entityBindings: [{ intent: loaded.intent.id, entity: { kind, id, type, label: label ?? '' }, role: req.body.role, boundBy: v.id, at: stamp() }],
-            events: [event(TOPICS.entityBound, loaded.intent, { entity: id, role: req.body.role })],
+            events: [bindingTold(loaded.intent, id, req.body.role, 'bound')],
           });
           return detailOf(v, loaded);
         },
@@ -779,7 +838,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
           if (!loaded.can.bind) return refuse(reply, 'Only whoever holds this intent can say what it’s about.');
           await store.commit({
             unbindEntities: [{ intent: loaded.intent.id, entity: req.params.entity, role: req.query.role }],
-            events: [event(TOPICS.entityUnbound, loaded.intent, { entity: req.params.entity, role: req.query.role })],
+            events: [bindingTold(loaded.intent, req.params.entity, req.query.role, 'unbound')],
           });
           return detailOf(v, loaded);
         },
@@ -839,7 +898,7 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
             intent: ref(intent),
             statement: versions[0]?.statement ?? intent.draft,
             lineOfSight: intent.ancestors.map((a) => byId.get(a)).filter((a): a is Intent => Boolean(a)).map(ref),
-            entities: entities.map((b) => ({ ref: b.entity, role: b.role, from: ref(byId.get(b.intent)!) })),
+            entities: entities.map((b) => ({ ref: b.entity, role: b.role, from: ref(byId.get(b.intent)!), ...(b.state === 'retired' ? { state: b.state } : {}) })),
             documents: documents.map((b) => ({ ref: b.document, from: ref(byId.get(b.intent)!) })),
             children: tree.filter((i) => i.parent === intent.id && sight.has(i.id)).map((i) => ({ intent: ref(i), life: i.life, ...(i.rating ? { rating: i.rating } : {}) })),
           };

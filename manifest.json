@@ -39,6 +39,7 @@
     "people:read",
     "notifications:send",
     "events:publish",
+    "events:subscribe",
     "inbox:write"
   ],
   "inbox": {
@@ -57,6 +58,11 @@
         "id": "check-in",
         "label": "How it’s going",
         "icon": "gauge"
+      },
+      {
+        "id": "needs-holder",
+        "label": "To pass again",
+        "icon": "person"
       }
     ]
   },

@@ -1,6 +1,10 @@
-import { appCredentialsFromEnv, appStorageFromEnv, commonSettings, loadConfigOrExit, outboxRelay, readManifest, startAppService } from '@augur/service-kit';
+import { appCredentialsFromEnv, appStorageFromEnv, commonSettings, followEvents, loadConfigOrExit, outboxRelay, readManifest, startAppService } from '@augur/service-kit';
 import { buildApp } from './app.ts';
+import { auditFromEnv } from './audit.ts';
+import { FOLLOWED, makeFollower } from './follow.ts';
 import { inboxFromEnv } from './inbox.ts';
+import { notifyFromEnv } from './notices.ts';
+import { peopleFromEnv } from './people.ts';
 import { organisationZoneFromEnv } from './reminders/organisation.ts';
 import { MemoryReminderStore, PgReminderStore } from './reminders/store.ts';
 import { scheduleReminders } from './reminders/sweep.ts';
@@ -46,6 +50,17 @@ const { EVENTS_URL } = process.env;
 const credentials = appCredentialsFromEnv(manifest.id);
 if (databaseUrl && EVENTS_URL && credentials) {
   outboxRelay({ pool: PgMandateStore.outboxPool(databaseUrl), eventsUrl: EVENTS_URL, credentials, onError: (err) => app.log.error({ err: (err as Error).message }, 'could not send events') }).start();
+  // Follow what happens around it (MB1): holders who leave, teams renamed, entities retired or merged in Data Atlas.
+  const log = (what: object) => app.log.info(what, 'nowhere to send this');
+  const handle = makeFollower({ app: manifest, store, people: peopleFromEnv(), audit: auditFromEnv(log), notify: notifyFromEnv(log), inbox: inboxFromEnv(log) });
+  followEvents({
+    eventsUrl: EVENTS_URL,
+    credentials,
+    topics: FOLLOWED,
+    cursor: { load: () => store.cursor(), save: (seq) => store.saveCursor(seq) },
+    handle,
+    onError: (err) => app.log.error({ err: (err as Error).message }, 'could not follow events'),
+  }).start();
 } else if (databaseUrl) {
   app.log.info(`EVENTS_URL or the app’s sign-in is not set, so ${manifest.name}’s events wait in its outbox.`);
 }

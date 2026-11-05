@@ -66,9 +66,20 @@ export interface Summary {
   ratingNote?: string;
   ratedAt?: string;
   sight: Sight;
+  /** Its holder no longer can: they were signed out for good, left, or left the team whose floor it's on. The holder is kept, so it can say who. */
+  needsHolder?: NeedsHolder;
   /** The intent it's part of, in lists. */
   partOf?: string;
 }
+
+/** Why a part has nobody to hold it, and since when. */
+export interface NeedsHolder {
+  why: 'disabled' | 'left' | 'removed';
+  since: string;
+}
+
+/** How a bound entity stands in Data Atlas: still in use, or retired there. */
+export type EntityState = 'active' | 'retired';
 
 /** A summary with what's below it, as far as the viewer sees. */
 export type Branch = Summary & { below: Branch[] };
@@ -117,6 +128,8 @@ export interface Rights {
   achieve: boolean;
   /** Withdraw it, and everything below it. */
   withdraw: boolean;
+  /** Pass it to someone new, once its holder no longer can: whoever passed it down, or the leads of the floor above. */
+  passAgain: boolean;
   /** Mark it the main effort among its siblings: its parent's holder. */
   mainEffort: boolean;
 }
@@ -157,7 +170,8 @@ export interface Detail {
   below: Branch[];
   backBriefs: BackBrief[];
   assessments: Assessment[];
-  entities: { entity: EntityRef; role: string; from?: string; at: string }[];
+  /** `state` is there once Data Atlas retires it; `mergedFrom` names the entity it pointed at before a merge moved it here. */
+  entities: { entity: EntityRef; role: string; from?: string; at: string; state?: EntityState; mergedFrom?: string }[];
   documents: { document: DocumentRef; from?: string; at: string }[];
   recheck: boolean;
   assessmentDue: boolean;
@@ -205,6 +219,11 @@ export interface PassBody {
   purpose?: string;
   byDate?: string;
   carry?: { entities?: string[]; documents?: string[] };
+}
+
+/** `POST /intents/:id/pass-again`: to whom, as in `PassBody`. */
+export interface PassAgainBody {
+  to: string;
 }
 
 /** `POST /intents/:id/back-brief`. */
@@ -276,6 +295,7 @@ export interface MandatePaths {
   '/intents/{id}/issue': { post: Call<Detail, { path: ById }> };
   '/intents/{id}/targets': { get: Call<Targets, { path: ById; query: { q?: string } }> };
   '/intents/{id}/pass': { post: Made<Summary, { path: ById; body: PassBody }> };
+  '/intents/{id}/pass-again': { post: Call<Detail, { path: ById; body: PassAgainBody }> };
   '/intents/{id}/back-brief': { post: Call<Detail, { path: ById; body: BackBriefBody }> };
   '/intents/{id}/assess': { post: Call<Detail, { path: ById; body: AssessBody }> };
   '/intents/{id}/achieve': { post: Call<Detail, { path: ById }> };

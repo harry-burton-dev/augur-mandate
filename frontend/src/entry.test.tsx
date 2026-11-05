@@ -100,7 +100,19 @@ const DETAIL = {
     achieve: false,
     withdraw: true,
     mainEffort: false,
+    passAgain: false,
   },
+};
+
+/** Jo's part, after Jo left: Engineering's lead passed it down, so they pass it again. */
+const ORPHAN = {
+  ...DETAIL,
+  intent: summary('a2', 'Refit Hull 4', { parent: 'a1', holder: 'person:jo', holderName: 'Jo Hart', needsHolder: { why: 'left', since: new Date().toISOString() } }),
+  lineOfSight: [{ ...summary('a1', 'Keep the fleet at sea'), mission: '', purpose: 'So the coast is watched', endState: '' }],
+  below: [],
+  passed: { by: 'Dana Reyes', at: new Date().toISOString() },
+  entities: [{ ...DETAIL.entities[0], state: 'retired' }],
+  can: { ...DETAIL.can, edit: false, pass: false, assess: false, passAgain: true },
 };
 
 /** Answers Mandate's service the way it would for a lead on Engineering. */
@@ -144,6 +156,7 @@ const service = vi.fn(async (input: RequestInfo | URL) => {
       floor: { active: 1, atRisk: 1, blocked: 0 },
     });
   if (path.endsWith('/v1/intents/a1')) return Response.json(DETAIL);
+  if (path.endsWith('/v1/intents/a2')) return Response.json(ORPHAN);
   return new Response(null, { status: 404 });
 });
 
@@ -223,6 +236,14 @@ describe('mandate', () => {
         },
       },
     ]);
+  });
+
+  it('says a part needs a holder, and offers whoever passed it down to pass it again', async () => {
+    const { el } = await mounted('/intents/a2');
+    expect(el.textContent).toContain('Needs a holder');
+    expect(el.textContent).toContain('Jo Hart no longer holds this: they left');
+    expect(el.textContent).toContain('HMS Example (retired in Data Atlas)');
+    expect(button(el, 'Pass it again')).toBeDefined();
   });
 
   it('says a refusal in the service’s own words', async () => {
