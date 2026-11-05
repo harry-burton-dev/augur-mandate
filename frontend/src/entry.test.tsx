@@ -225,6 +225,20 @@ describe('mandate', () => {
     ]);
   });
 
+  it('says a refusal in the service’s own words', async () => {
+    // As the service kit sends one: a code in `reason`, the sentence in `detail` and `message`.
+    const words = 'Only this floor’s members can read its intent.';
+    const refused = async () =>
+      Response.json(
+        { type: 'about:blank', title: 'Forbidden', status: 403, reason: 'forbidden', detail: words, error: 'forbidden', message: words },
+        { status: 403, headers: { 'content-type': 'application/problem+json' } },
+      );
+    // What Mandate loaded is kept per floor, so this asks on a floor of its own.
+    const { el } = await mounted('/', { fetch: refused as unknown as typeof fetch, workspace: { ...floor, id: 'elsewhere' } });
+    expect(el.textContent).toContain(words);
+    expect(el.textContent).not.toContain('forbidden');
+  });
+
   it('says why entities can’t be bound while no app picks them, rather than hiding it', async () => {
     // No answer for entity.pick: the fake shell says no app handles it, as AUGUR does without Data Atlas.
     const { el, c } = await mounted('/intents/a1');
