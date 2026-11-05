@@ -1,8 +1,10 @@
-import { appCredentialsFromEnv, serviceHeaders, withDeadline } from '@augur/service-kit';
+import { appCredentialsFromEnv, serviceHeaders } from '@augur/service-kit';
 import { knownZone } from './rules.ts';
 
 /** How long Mandate keeps the organisation's time zone before asking identity again. */
 const KEEP_MS = 10 * 60_000;
+/** How long it waits for identity's answer. */
+const WAIT_MS = 5_000;
 
 /**
  * The organisation's time zone (ADR 0042), which reminders are worked out in (ADR 0061). Asked of
@@ -17,7 +19,7 @@ export const organisationZoneFromEnv = ({ env = process.env, fetchImpl = fetch, 
   return async () => {
     if (kept && now() - kept.at < KEEP_MS) return kept.zone;
     try {
-      const res = await withDeadline(fetchImpl)(`${identityUrl.replace(/\/$/, '')}/v1/organisation`, { headers: await serviceHeaders(credentials) });
+      const res = await fetchImpl(`${identityUrl.replace(/\/$/, '')}/v1/organisation`, { headers: await serviceHeaders(credentials), signal: AbortSignal.timeout(WAIT_MS) });
       if (!res.ok) throw new Error(`Identity answered ${res.status}.`);
       kept = { zone: knownZone(((await res.json()) as { timeZone?: string }).timeZone), at: now() };
     } catch (err) {
