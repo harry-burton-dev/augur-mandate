@@ -4,9 +4,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.ts';
 import type { MandateInbox } from '../inbox.ts';
 import type { People } from '../people.ts';
-import { MemoryMandateStore, PgMandateStore, type MandateStore } from '../store.ts';
+import { PgMandateStore, type MandateStore } from '../store.ts';
 import { addDays, dayIn, nextAfter, ruleOf, ruleProblem } from './rules.ts';
-import { MemoryReminderStore, PgReminderStore, type ReminderStore } from './store.ts';
+import { PgReminderStore, type ReminderStore } from './store.ts';
 import { sweepReminders } from './sweep.ts';
 
 describe('rhythms as rules (ADR 0061)', () => {
@@ -203,12 +203,6 @@ const reminds = (make: () => Promise<{ store: MandateStore; reminders: ReminderS
     expect(t.inbox.has(`late-back-brief/${mine.id}`)).toBe(false);
   });
 };
-
-describe('reminders', () =>
-  reminds(async () => {
-    const store = new MemoryMandateStore();
-    return { store, reminders: new MemoryReminderStore(store) };
-  }));
 
 // On a database of its own, made beside DATABASE_URL's, so Mandate's other tests can use that one at the same time.
 describe.runIf(process.env.DATABASE_URL)('reminders on Postgres', () => {

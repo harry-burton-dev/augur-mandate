@@ -22,7 +22,7 @@ A rhythm is an RFC 5545 rule without DTSTART, such as `FREQ=WEEKLY;BYDAY=MO`. It
 
 In `frontend/src`, Mandate is built on SDK 2 with Quill's app starter: `entry.tsx` hands `defineReactApp` the app, its places, the intents that open it (`mandate.open`, `aim.open`), the `aim.pick` picker and the Home card. `app.tsx` holds its places on the address bar (`placeRoutes`: `/`, `/yours`, `/intents/:id`) and loads with `useData`, kept per floor; `api.ts` calls the service with `createAppClient`, checked against `MandatePaths` in `service/src/api-types.ts`, where the wire types are written once.
 
-Set `NODE_AUTH_TOKEN` to a token that can read GitHub Packages, then `pnpm install`, `pnpm test` and `pnpm build`. Test the service on Postgres too with `DATABASE_URL=… pnpm --filter @apps/mandate test`. AUGUR's `docs/build-an-app.md` covers running it in a shell.
+Set `NODE_AUTH_TOKEN` to a token that can read GitHub Packages, then `pnpm install`, `pnpm test` and `pnpm build`. The service's tests run on Postgres, never an in-memory copy: `DATABASE_URL=… pnpm --filter @apps/mandate test`, on a database of their own, because they empty the `mandate` schema (CI starts one; without `DATABASE_URL` they skip). AUGUR's `docs/build-an-app.md` covers running it in a shell; the service needs `DATABASE_URL` there too, such as the dev stack's Postgres.
 
 ## Releases
 

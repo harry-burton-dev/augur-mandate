@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { steadyPool } from '@augur/service-kit';
-import { fromIntentRow, INTENT_COLUMNS, type Intent, type IntentRow, type MemoryMandateStore } from '../store.ts';
+import { fromIntentRow, INTENT_COLUMNS, type Intent, type IntentRow } from '../store.ts';
 
 /** Which reminder a row records: the back-brief's, or the assessment's. */
 export type Reminder = 'brief' | 'rating';
@@ -77,45 +77,5 @@ export class PgReminderStore implements ReminderStore {
 
   async close() {
     await this.pool.end();
-  }
-}
-
-/** Beside the in-memory store, as under `pnpm dev:app` and in tests. */
-export class MemoryReminderStore implements ReminderStore {
-  readonly values: Record<Reminder, Map<string, string>> = { brief: new Map(), rating: new Map() };
-  private readonly store: MemoryMandateStore;
-
-  constructor(store: MemoryMandateStore) {
-    this.store = store;
-  }
-
-  private all() {
-    return [...this.store.rows.values()].map((i) => structuredClone(i)).sort((a, b) => a.id.localeCompare(b.id));
-  }
-
-  async waitingForBriefs(through: string) {
-    return this.all().filter((i) => i.life === 'passed' && i.briefBy && i.briefBy <= through);
-  }
-  async underWay(before: Date) {
-    return this.all().filter((i) => i.life === 'active' && Date.parse(i.ratedAt ?? i.passedAt ?? i.createdAt) < before.getTime());
-  }
-  async reminded(what: Reminder, intents: readonly string[]) {
-    return new Map(intents.flatMap((id) => (this.values[what].has(id) ? [[id, this.values[what].get(id)!] as const] : [])));
-  }
-  async remindedWith(what: Reminder, prefix: string) {
-    return this.all().flatMap((intent) => {
-      const value = this.values[what].get(intent.id);
-      return value?.startsWith(prefix) ? [{ intent, value }] : [];
-    });
-  }
-  async claim(what: Reminder, intent: string, value: string) {
-    if (!this.store.rows.has(intent) || this.values[what].get(intent) === value) return false;
-    this.values[what].set(intent, value);
-    return true;
-  }
-  async release(what: Reminder, intent: string, value: string, previous: string | undefined) {
-    if (this.values[what].get(intent) !== value) return;
-    if (previous === undefined) this.values[what].delete(intent);
-    else this.values[what].set(intent, previous);
   }
 }

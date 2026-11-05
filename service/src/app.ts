@@ -44,7 +44,6 @@ import {
   ConflictError,
   EMPTY_STATEMENT,
   ENDED,
-  MemoryMandateStore,
   newId,
   RATINGS,
   TOPICS,
@@ -69,7 +68,7 @@ export interface Options {
   manifest?: AppManifest;
   /** Checks the caller the gateway signed for Mandate. In production it is on by default; in dev `x-user-*` headers are believed. */
   callers?: CallerCheck;
-  store?: MandateStore;
+  store: MandateStore;
   audit?: Audit;
   notify?: Notify;
   /** Where a part's back-brief waits in the shell's Inbox. */
@@ -144,7 +143,7 @@ const lifeWords: Record<Intent['life'], string> = { draft: 'Draft', passed: 'Wai
 
 const personOf = (holder: string) => (holder.startsWith('person:') ? holder.slice('person:'.length) : undefined);
 
-export const buildApp = async ({ manifest = readManifest(import.meta.url), callers, store = new MemoryMandateStore(), audit, notify, inbox, people = peopleFromEnv(), now = () => new Date() }: Options = {}) => {
+export const buildApp = async ({ manifest = readManifest(import.meta.url), callers, store, audit, notify, inbox, people = peopleFromEnv(), now = () => new Date() }: Options) => {
   const app = Fastify(serviceFastifyOptions());
   const record = audit ?? auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
   const tell = notify ?? notifyFromEnv((notice) => app.log.info({ notice }, 'notification (no notifications here)'));
