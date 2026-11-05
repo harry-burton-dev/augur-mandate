@@ -60,6 +60,8 @@ export interface Intent {
   rhythm?: string;
   /** When a part passed down should be back-briefed by (YYYY-MM-DD). */
   briefBy?: string;
+  /** It was a part of this intent until that closed and let it stand alone (MB4), and when. */
+  stoodAlone?: { from: string; at: string };
   /** The holder's latest judgement. */
   rating?: Rating;
   ratingNote?: string;
@@ -154,6 +156,7 @@ export const TOPICS = {
   entityUnbound: 'mandate.intent.entity-unbound',
   needsHolder: 'mandate.intent.needs-holder',
   discussed: 'mandate.intent.discussed',
+  stoodAlone: 'mandate.intent.stood-alone',
 } as const;
 
 export interface OutboxEvent {
@@ -468,11 +471,19 @@ export const migrations: readonly Migration[] = [
       );
       create index messages_ref on mandate.messages (ref_app, ref_type, ref_id, at);`,
   },
+  {
+    // Closing with a choice (MB4): a part let stand alone when the intent above it closed.
+    id: '005_stand_alone',
+    sql: `
+      alter table mandate.intents add column stood_alone_from text;
+      alter table mandate.intents add column stood_alone_at timestamptz;`,
+  },
 ];
 
 export const INTENT_COLUMNS = `id, parent_id, root_id, ancestors, workspace_id, floor_principal, floor_kind, floor_name, holder, holder_name, title, life, version, draft,
   briefed_parent_version, main_effort, to_char(by_date, 'YYYY-MM-DD') as by_date, rhythm_days, rating, rating_note, rated_at, created_by, created_by_name,
-  passed_by, passed_by_name, passed_at, ended_at, ended_reason, needs_holder, needs_holder_since, created_at, updated_at, to_char(brief_by, 'YYYY-MM-DD') as brief_by, rhythm`;
+  passed_by, passed_by_name, passed_at, ended_at, ended_reason, needs_holder, needs_holder_since, created_at, updated_at, to_char(brief_by, 'YYYY-MM-DD') as brief_by, rhythm,
+  stood_alone_from, stood_alone_at`;
 
 export type IntentRow = {
   id: string; parent_id: string | null; root_id: string; ancestors: string[]; workspace_id: string; floor_principal: string; floor_kind: Intent['floorKind']; floor_name: string;
@@ -480,7 +491,7 @@ export type IntentRow = {
   by_date: string | null; rhythm_days: number; rating: Rating | null; rating_note: string | null; rated_at: Date | null; created_by: string; created_by_name: string;
   passed_by: string | null; passed_by_name: string | null; passed_at: Date | null; ended_at: Date | null; ended_reason: string | null;
   needs_holder: Wire.NeedsHolder['why'] | null; needs_holder_since: Date | null; created_at: Date; updated_at: Date;
-  brief_by: string | null; rhythm: string | null;
+  brief_by: string | null; rhythm: string | null; stood_alone_from: string | null; stood_alone_at: Date | null;
 };
 
 const opt = <K extends string, V>(key: K, value: V | null | undefined) => (value === null || value === undefined ? {} : ({ [key]: value } as { [P in K]: V }));
@@ -520,6 +531,7 @@ export const fromIntentRow = (r: IntentRow): Intent => ({
   updatedAt: r.updated_at.toISOString(),
   ...opt('briefBy', r.brief_by),
   ...opt('rhythm', r.rhythm),
+  ...(r.stood_alone_from ? { stoodAlone: { from: r.stood_alone_from, at: (r.stood_alone_at ?? r.updated_at).toISOString() } } : {}),
 });
 
 export class PgMandateStore implements MandateStore {
@@ -657,10 +669,11 @@ export class PgMandateStore implements MandateStore {
         await client.query(
           `insert into mandate.intents (id, parent_id, root_id, ancestors, workspace_id, floor_principal, floor_kind, floor_name, holder, holder_name, title, life, version, draft,
              briefed_parent_version, main_effort, by_date, rhythm_days, rating, rating_note, rated_at, created_by, created_by_name, passed_by, passed_by_name, passed_at,
-             ended_at, ended_reason, created_at, updated_at, needs_holder, needs_holder_since, brief_by, rhythm)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
+             ended_at, ended_reason, created_at, updated_at, needs_holder, needs_holder_since, brief_by, rhythm, stood_alone_from, stood_alone_at)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
            on conflict (id) do update set parent_id = excluded.parent_id, root_id = excluded.root_id, ancestors = excluded.ancestors, workspace_id = excluded.workspace_id,
-             floor_principal = excluded.floor_principal, floor_kind = excluded.floor_kind, floor_name = excluded.floor_name, needs_holder = excluded.needs_holder, needs_holder_since = excluded.needs_holder_since,
+             floor_principal = excluded.floor_principal, floor_kind = excluded.floor_kind, stood_alone_from = excluded.stood_alone_from, stood_alone_at = excluded.stood_alone_at,
+             floor_name = excluded.floor_name, needs_holder = excluded.needs_holder, needs_holder_since = excluded.needs_holder_since,
              passed_by = excluded.passed_by, passed_by_name = excluded.passed_by_name, passed_at = excluded.passed_at, holder = excluded.holder, holder_name = excluded.holder_name, title = excluded.title, life = excluded.life,
              version = excluded.version, draft = excluded.draft, briefed_parent_version = excluded.briefed_parent_version, main_effort = excluded.main_effort,
              by_date = excluded.by_date, rhythm_days = excluded.rhythm_days, rating = excluded.rating, rating_note = excluded.rating_note, rated_at = excluded.rated_at,
@@ -669,7 +682,7 @@ export class PgMandateStore implements MandateStore {
             i.id, i.parent ?? null, i.root, i.ancestors, i.workspace, i.floor, i.floorKind, i.floorName, i.holder, i.holderName, i.title, i.life, i.version, JSON.stringify(i.draft),
             i.briefedParentVersion ?? null, i.mainEffort, i.byDate ?? null, i.rhythmDays, i.rating ?? null, i.ratingNote ?? null, i.ratedAt ?? null, i.createdBy, i.createdByName,
             i.passedBy ?? null, i.passedByName ?? null, i.passedAt ?? null, i.endedAt ?? null, i.endedReason ?? null, i.createdAt, i.updatedAt,
-            i.needsHolder?.why ?? null, i.needsHolder?.since ?? null, i.briefBy ?? null, i.rhythm ?? null,
+            i.needsHolder?.why ?? null, i.needsHolder?.since ?? null, i.briefBy ?? null, i.rhythm ?? null, i.stoodAlone?.from ?? null, i.stoodAlone?.at ?? null,
           ],
         );
       for (const v of change.versions ?? []) {

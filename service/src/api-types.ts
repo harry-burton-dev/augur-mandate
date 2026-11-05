@@ -177,6 +177,8 @@ export interface Detail {
   documents: { document: DocumentRef; from?: string; at: string }[];
   recheck: boolean;
   assessmentDue: boolean;
+  /** It stood alone when the intent it was part of closed: that intent's title, and when. */
+  stoodAlone?: { from: string; at: string };
   can: Rights;
 }
 
@@ -285,9 +287,18 @@ export interface AssessBody {
   note?: string;
 }
 
+/** What happens to the open parts below an intent that closes: they close with it (as before), or stand alone. */
+export type CloseChoice = 'close' | 'stand-alone';
+
+/** `POST /intents/:id/achieve`. */
+export interface AchieveBody {
+  parts?: CloseChoice;
+}
+
 /** `POST /intents/:id/withdraw`. */
 export interface WithdrawBody {
   reason?: string;
+  parts?: CloseChoice;
 }
 
 /** `POST /intents/:id/main-effort`. */
@@ -347,7 +358,7 @@ export interface MandatePaths {
   '/intents/{id}/pass-again': { post: Call<Detail, { path: ById; body: PassAgainBody }> };
   '/intents/{id}/back-brief': { post: Call<Detail, { path: ById; body: BackBriefBody }> };
   '/intents/{id}/assess': { post: Call<Detail, { path: ById; body: AssessBody }> };
-  '/intents/{id}/achieve': { post: Call<Detail, { path: ById }> };
+  '/intents/{id}/achieve': { post: Call<Detail, { path: ById; body: AchieveBody }> };
   '/intents/{id}/withdraw': { post: Call<Detail, { path: ById; body: WithdrawBody }> };
   '/intents/{id}/main-effort': { post: Call<Detail, { path: ById; body: MainEffortBody }> };
   '/intents/{id}/entities': { post: Call<Detail, { path: ById; body: BindEntityBody }> };
