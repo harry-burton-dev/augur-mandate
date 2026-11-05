@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import type { DocumentRef } from '@augur/mfe-sdk';
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { isIntentCancelled, openDocument, openEntity, pickDocument, pickEntities, type MountContext } from '@augur/mfe-sdk';
 import {
   AppFrame,
   Button,
@@ -16,6 +16,8 @@ import {
   PageHead,
   Path,
   Prose,
+  place,
+  placeRoutes,
   RailLink,
   Refs,
   Section,
@@ -29,7 +31,11 @@ import {
   floorMark,
   plainText,
   relativeTime,
+  useData,
+  useRefresh,
+  type AppProps,
   type ButtonKind,
+  type IconName,
   type DialogSubmit,
   type ListItem,
   type PageAction,
@@ -38,22 +44,19 @@ import {
   type StatusName,
   type TimelineItem,
 } from '@augur/app-kit';
+import manifest from '../../manifest.json';
 import {
   RATING_WORDS,
   ROLE_WORDS,
   type Branch,
   type Detail,
   type EntityRef,
-  type Floor,
   type FloorItem,
-  type FloorKind,
-  type MandateApi,
-  type Place,
+  MandateApi,
   type Rating,
   type Statement,
   type Summary,
   type Target,
-  type Yours,
 } from './api.js';
 
 /** How a summary's state reads, as a mark and a word: where it is in its life, else how its holder judges it. */
@@ -147,18 +150,32 @@ const ROLE_OPTIONS: SelectOption[] = Object.entries(ROLE_WORDS).map(([value, lab
 
 type DialogName = 'new' | 'edit' | 'pass' | 'accept' | 'concern' | 'assess' | 'achieve' | 'withdraw' | 'role';
 
-export interface MandateAppProps {
-  api: MandateApi;
-  floorName: string;
-  floorKind: FloorKind;
-  place: Place;
-  /** Where the person went, for the address bar. */
-  onPlace?: (place: Place) => void;
-  pickDocument?: () => Promise<DocumentRef>;
-  pickEntity?: () => Promise<EntityRef>;
-  openDocument?: (ref: DocumentRef) => void;
-  openEntity?: (ref: EntityRef) => void;
-}
+/** Where Mandate is: a floor's list, what you hold, or one intent. */
+type Where = { view: 'floor' } | { view: 'yours' } | { view: 'intent'; id: string };
+
+/**
+ * Mandate's places on the address bar, below its route. The frame (`MandateApp`) stays mounted
+ * from one place to the next, so the rail and the screen's turn carry on: it reads the place on
+ * screen from the router, and the places themselves draw nothing of their own.
+ */
+const Here = () => null;
+export const places = placeRoutes({
+  floor: place('/', Here),
+  yours: place('/yours', Here),
+  intent: place('/intents/:id', Here),
+});
+
+/** The place on screen. An address that's no place in Mandate shows the floor. */
+const useWhere = (): Where => {
+  const atIntent = places.intent.useOpen();
+  const atYours = places.yours.useOpen();
+  const { id } = places.intent.useParams();
+  if (atIntent && id) return { view: 'intent', id };
+  return atYours ? { view: 'yours' } : { view: 'floor' };
+};
+
+/** Domain events Mandate's service publishes: any of them may change what's on screen. */
+const CHANGES = ['issued', 'passed', 'accepted', 'assessed', 'achieved', 'withdrawn', 'superseded', 'entity-bound', 'entity-unbound'].map((what) => `mandate.intent.${what}`);
 
 /** The draft differs from what was last issued, or nothing has been yet. */
 const unissued = (d: Detail) => {
@@ -190,13 +207,25 @@ const history = (d: Detail): TimelineItem[] => [
  * intent with its statement, line of sight, the parts below and what it's bound to.
  * Pickers and opening other apps' things come in as functions from the entry.
  */
-export function MandateApp({ api, floorName, floorKind, place: start, onPlace, pickDocument, pickEntity, openDocument, openEntity }: MandateAppProps) {
-  const [place, setPlace] = useState<Place>(start);
-  const [floor, setFloor] = useState<Floor>();
-  const [yours, setYours] = useState<Yours>();
-  const [detail, setDetail] = useState<Detail>();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+export function MandateApp({ ctx }: AppProps<MountContext>) {
+  const api = useMemo(() => new MandateApi(ctx), [ctx]);
+  const { name: floorName, kind: floorKind } = ctx.workspace;
+  const place = useWhere();
+  const goFloor = places.floor.useGo();
+  const goYours = places.yours.useGo();
+  const goIntent = places.intent.useGo();
+  const refreshAll = useRefresh();
+  // Kept per floor while Mandate is open, and loaded again when its service says something changed.
+  const floorData = useData(['floor'], (signal) => api.floor(signal), { refreshOn: CHANGES });
+  const yoursData = useData(['yours'], (signal) => api.yours(signal), { refreshOn: CHANGES });
+  const openId = place.view === 'intent' ? place.id : '';
+  const detailData = useData(['intent', openId], (signal) => api.intent(openId, signal), { enabled: Boolean(openId), refreshOn: CHANGES });
+  const floor = floorData.data;
+  const yours = yoursData.data;
+  const detail = openId ? detailData.data : undefined;
+  const shown = [floorData, yoursData, ...(openId ? [detailData] : [])];
+  const loading = shown.some((d) => d.loading || d.refreshing);
+  const error = shown.find((d) => d.error && d.data === undefined)?.error?.message ?? '';
   const [dialog, setDialog] = useState<DialogName>();
   const [note, setNote] = useState('');
   const [targets, setTargets] = useState<Target[]>([]);
@@ -204,43 +233,21 @@ export function MandateApp({ api, floorName, floorKind, place: start, onPlace, p
   const [picked, setPicked] = useState<EntityRef>();
   const [noEntities, setNoEntities] = useState('');
 
-  /** Loads the rail, then whatever the place shows. */
-  const refresh = useCallback(
-    async (at: Place) => {
-      setLoading(true);
-      setError('');
-      try {
-        const [f, y] = await Promise.all([api.floor(), api.yours()]);
-        setFloor(f);
-        setYours(y);
-        if (at.view === 'intent') setDetail(await api.intent(at.id));
-      } catch (err) {
-        setError((err as Error).message);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [api],
-  );
-  useEffect(() => void refresh(start), [refresh, start]);
-
-  const go = (to: Place) => {
-    setPlace(to);
+  /** Goes to a place: the address bar moves, so it can be shared and Back comes here again. */
+  const go = (to: Where) => {
     setNote('');
-    setDetail((d) => (to.view === 'intent' && d?.intent.id === to.id ? d : undefined));
-    onPlace?.(to);
-    void refresh(to);
+    if (to.view === 'intent') goIntent({ id: to.id });
+    else if (to.view === 'yours') goYours();
+    else goFloor();
   };
 
-  /** Runs a change to the open intent, shows what it answers, and refreshes the rail. Throws for a dialog to show. */
-  const change = async (run: () => Promise<Detail>, said = '') => {
-    setDetail(await run());
+  /** Runs a change, says so, and loads again what's on screen. Throws for a dialog to show. */
+  const change = async (run: () => Promise<unknown>, said = '') => {
+    await run();
     setNote(said);
-    const [f, y] = await Promise.all([api.floor(), api.yours()]);
-    setFloor(f);
-    setYours(y);
+    await refreshAll();
   };
-  const act = async (run: () => Promise<Detail>, said = '') => {
+  const act = async (run: () => Promise<unknown>, said = '') => {
     try {
       await change(run, said);
     } catch (err) {
@@ -402,7 +409,7 @@ export function MandateApp({ api, floorName, floorKind, place: start, onPlace, p
           )}
           <Status status={mark.status} label={mark.label} />
           {ownChild ? (
-            <Button kind="ghost" size="sm" onPress={() => void act(() => api.mainEffort(b.id, !b.mainEffort).then(() => api.intent(detail.intent.id)))}>
+            <Button kind="ghost" size="sm" onPress={() => void act(() => api.mainEffort(b.id, !b.mainEffort))}>
               {b.mainEffort ? 'Clear main effort' : 'Main effort'}
             </Button>
           ) : null}
@@ -464,25 +471,26 @@ export function MandateApp({ api, floorName, floorKind, place: start, onPlace, p
   };
 
   const bindEntity = async () => {
-    if (!pickEntity) return;
     try {
-      setPicked(await pickEntity());
+      const [entity] = await pickEntities(ctx, { purpose: 'Bind to this intent' });
+      if (!entity) return;
+      setPicked(entity);
       setDialog('role');
     } catch (err) {
-      if ((err as Error).name === 'IntentCancelled') return;
+      if (isIntentCancelled(err)) return;
       // Explain, never hide: the control stays, saying why it can't be used yet.
       setNoEntities('Linking to entities arrives with Data Atlas.');
     }
   };
 
   const addDocument = async () => {
-    if (!pickDocument || !detail) return;
+    if (!detail) return;
     const id = detail.intent.id;
     try {
-      const doc = await pickDocument();
+      const doc = await pickDocument(ctx, { purpose: 'Add to this intent as context' });
       await act(() => api.addDocument(id, doc));
     } catch (err) {
-      if ((err as Error).name === 'IntentCancelled') return;
+      if (isIntentCancelled(err)) return;
       setNote((err as Error).message);
     }
   };
@@ -593,7 +601,7 @@ export function MandateApp({ api, floorName, floorKind, place: start, onPlace, p
                     ...e.entity,
                     ...(e.from ? { from: e.from } : {}),
                   }))}
-                  onOpen={(ref) => openEntity?.(g.items.find((e) => e.entity.id === ref.id)!.entity)}
+                  onOpen={(ref) => void openEntity(ctx, g.items.find((e) => e.entity.id === ref.id)!.entity)}
                   onRemove={can.bind ? (ref) => void act(() => api.unbindEntity(intent.id, ref.id, g.role)) : undefined}
                 />
               </div>
@@ -617,10 +625,10 @@ export function MandateApp({ api, floorName, floorKind, place: start, onPlace, p
               kind: 'document' as const,
               ...(doc.from ? { from: doc.from } : {}),
             }))}
-            onOpen={(ref) => openDocument?.(d.documents.find((doc) => doc.document.id === ref.id)!.document)}
+            onOpen={(ref) => void openDocument(ctx, d.documents.find((doc) => doc.document.id === ref.id)!.document)}
             onRemove={can.bind ? (ref) => void act(() => api.removeDocument(intent.id, d.documents.find((doc) => doc.document.id === ref.id)!.document)) : undefined}
           />
-          {can.bind && pickDocument ? (
+          {can.bind ? (
             <div>
               <Button kind="ghost" size="sm" onPress={() => void addDocument()}>
                 Add a document
@@ -662,7 +670,7 @@ export function MandateApp({ api, floorName, floorKind, place: start, onPlace, p
   };
   const submitPass: DialogSubmit = async (values) => {
     const d = detail!;
-    await api.pass(d.intent.id, {
+    const part = {
       to: values.to ?? '',
       title: values.title ?? '',
       ...(values.purpose?.trim() ? { purpose: values.purpose } : {}),
@@ -671,8 +679,8 @@ export function MandateApp({ api, floorName, floorKind, place: start, onPlace, p
         entities: carry.filter((c) => c.startsWith('e|')).map((c) => c.slice(2)),
         documents: carry.filter((c) => c.startsWith('d|')).map((c) => c.slice(2)),
       },
-    });
-    await change(() => api.intent(d.intent.id), 'Passed down. It’s under way once they back-brief it.');
+    };
+    await change(() => api.pass(d.intent.id, part), 'Passed down. It’s under way once they back-brief it.');
   };
   const submitAccept: DialogSubmit = async (values) => {
     await change(
@@ -944,14 +952,14 @@ export function MandateApp({ api, floorName, floorKind, place: start, onPlace, p
   );
   let main: ReactNode;
   let aside: ReactNode;
-  if (error) main = <State kind="error" heading="Couldn’t load Mandate" body={error} action="Try again" onAction={() => void refresh(place)} />;
+  if (error) main = <State kind="error" heading="Couldn’t load Mandate" body={error} action="Try again" onAction={() => void refreshAll()} />;
   else if (place.view === 'yours') main = yoursView();
   else if (place.view === 'intent') ({ main, aside } = intentView());
   else main = floorView();
   return (
     <>
       <AppFrame
-        app={{ name: 'Mandate', icon: 'compass' }}
+        app={{ name: manifest.name, icon: manifest.icon as IconName }}
         onFront={() => go({ view: 'floor' })}
         rail={rail}
         railLabel="Intent"

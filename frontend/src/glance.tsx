@@ -1,34 +1,24 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Button, Facts, List, State, type Fact, type ListItem } from '@augur/app-kit';
-import type { HomeGlance, MandateApi } from './api.js';
+import { useMemo } from 'react';
+import { Button, Facts, List, State, useData, type AppSurfaceProps, type Fact, type ListItem } from '@augur/app-kit';
+import type { MountContext } from '@augur/mfe-sdk';
+import { MandateApi } from './api.js';
+import { AIM_OPEN, MANDATE_OPEN } from './intents.js';
 
 /** How many intents the card names: it's a glance, not a list. */
 const NAMED = 2;
 
-export interface MandateGlanceProps {
-  api: MandateApi;
-  onOpen: (id: string) => void;
-  onOpenYours: () => void;
-}
-
 /**
  * Mandate's card on Home: what's waiting on the person (parts passed to them to
  * say back, or ones whose parent changed), and how this floor's intent stands.
+ * Opening anything raises an intent, so the shell opens Mandate at it.
  */
-export function MandateGlance({ api, onOpen, onOpenYours }: MandateGlanceProps) {
-  const [glance, setGlance] = useState<HomeGlance>();
-  const [failure, setFailure] = useState('');
-  const load = useCallback(async () => {
-    setFailure('');
-    try {
-      setGlance(await api.home());
-    } catch (err) {
-      setFailure((err as Error).message);
-    }
-  }, [api]);
-  useEffect(() => void load(), [load]);
+export function MandateGlance({ ctx }: AppSurfaceProps<MountContext>) {
+  const api = useMemo(() => new MandateApi(ctx), [ctx]);
+  const { data: glance, error, refresh } = useData(['home'], (signal) => api.home(signal));
+  const onOpen = (id: string) => void ctx.raise({ type: AIM_OPEN, payload: { id } });
+  const onOpenYours = () => void ctx.raise({ type: MANDATE_OPEN, payload: { path: '/yours' } });
 
-  if (failure) return <State kind="error" heading="Couldn’t reach Mandate" body={failure} action="Try again" onAction={() => void load()} />;
+  if (error && !glance) return <State kind="error" heading="Couldn’t reach Mandate" body={error.message} action={error.retryable ? 'Try again' : undefined} onAction={refresh} />;
   if (!glance) return <Facts loading count={3} />;
   const facts: Fact[] = [
     { value: glance.waiting.length, label: 'Waiting on you' },

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Heading, List, TextField, type ListItem } from '@augur/app-kit';
-import type { IntentRef, MandateApi } from './api.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Button, Heading, List, TextField, type ListItem, type PickerProps } from '@augur/app-kit';
+import type { MountContext } from '@augur/mfe-sdk';
+import { MandateApi, type IntentRef } from './api.js';
 
 interface Pickable {
   id: string;
@@ -8,19 +9,16 @@ interface Pickable {
   detail: string;
 }
 
-export interface MandatePickerProps {
-  api: MandateApi;
-  purpose?: string;
-  onPick: (intent: IntentRef) => void;
-  onCancel: () => void;
-}
-
 /**
  * Mandate answering `aim.pick` for another app: an intent under way on this
  * floor or held by the person, or one found by the words of its title. A
  * briefing tool asks this to bound what it gathers to one intent and its tree.
  */
-export function MandatePicker({ api, purpose, onPick, onCancel }: MandatePickerProps) {
+export function MandatePicker({ ctx, intent, respond, cancel }: PickerProps<MountContext>) {
+  const api = useMemo(() => new MandateApi(ctx), [ctx]);
+  const said = (intent.payload as { purpose?: unknown } | undefined)?.purpose;
+  const purpose = typeof said === 'string' ? said : '';
+  const onPick = (picked: IntentRef) => respond(picked);
   const [query, setQuery] = useState('');
   const [intents, setIntents] = useState<Pickable[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,7 +97,7 @@ export function MandatePicker({ api, purpose, onPick, onCancel }: MandatePickerP
         }}
       />
       <div>
-        <Button kind="ghost" size="sm" onPress={onCancel}>
+        <Button kind="ghost" size="sm" onPress={cancel}>
           Cancel
         </Button>
       </div>
