@@ -99,6 +99,12 @@ export interface Assessment extends Wire.Assessment {
   by: string;
 }
 
+/** A message as kept: what the page shows, and who sent it about which intent. */
+export interface Message extends Wire.Message {
+  intent: string;
+  by: string;
+}
+
 /** An entity from Data Atlas, as Mandate keeps a reference to it. The label is a cached name and may be stale. */
 export interface EntityRef extends Omit<Wire.EntityRef, 'label' | 'at'> {
   label: string;
@@ -147,6 +153,7 @@ export const TOPICS = {
   entityBound: 'mandate.intent.entity-bound',
   entityUnbound: 'mandate.intent.entity-unbound',
   needsHolder: 'mandate.intent.needs-holder',
+  discussed: 'mandate.intent.discussed',
 } as const;
 
 export interface OutboxEvent {
@@ -164,6 +171,7 @@ export interface Change {
   versions?: Version[];
   backBriefs?: BackBrief[];
   assessments?: Assessment[];
+  messages?: Message[];
   entityBindings?: EntityBinding[];
   documentBindings?: DocumentBinding[];
   unbindEntities?: { intent: string; entity: string; role: string }[];
@@ -192,6 +200,8 @@ export interface MandateStore {
   versions(intent: string): Promise<Version[]>;
   backBriefs(intent: string): Promise<BackBrief[]>;
   assessments(intent: string, limit?: number): Promise<Assessment[]>;
+  /** An intent's discussion, oldest first. */
+  messages(intent: string): Promise<Message[]>;
   entityBindings(intents: readonly string[]): Promise<EntityBinding[]>;
   documentBindings(intents: readonly string[]): Promise<DocumentBinding[]>;
   /** The bindings of one entity: what Data Atlas shows as "used by". With `hidden`, the merged-away rows too. */
@@ -214,6 +224,7 @@ export class MemoryMandateStore implements MandateStore {
   readonly versionRows: Version[] = [];
   readonly briefRows: BackBrief[] = [];
   readonly assessmentRows: Assessment[] = [];
+  readonly messageRows: Message[] = [];
   entityRows: EntityBinding[] = [];
   documentRows: DocumentBinding[] = [];
   readonly outbox: OutboxEvent[] = [];
@@ -252,6 +263,9 @@ export class MemoryMandateStore implements MandateStore {
   async assessments(intent: string, limit = 20) {
     return this.assessmentRows.filter((a) => a.intent === intent).reverse().slice(0, limit);
   }
+  async messages(intent: string) {
+    return this.messageRows.filter((m) => m.intent === intent);
+  }
   async entityBindings(intents: readonly string[]) {
     return this.entityRows.filter((b) => intents.includes(b.intent) && b.state !== 'merged').map((b) => structuredClone(b));
   }
@@ -276,6 +290,7 @@ export class MemoryMandateStore implements MandateStore {
     this.versionRows.push(...(change.versions ?? []));
     this.briefRows.push(...(change.backBriefs ?? []));
     this.assessmentRows.push(...(change.assessments ?? []));
+    this.messageRows.push(...(change.messages ?? []));
     for (const u of change.unbindEntities ?? []) this.entityRows = this.entityRows.filter((b) => !(b.intent === u.intent && b.entity.id === u.entity && b.role === u.role));
     for (const u of change.unbindDocuments ?? []) this.documentRows = this.documentRows.filter((b) => !(b.intent === u.intent && b.document.app === u.app && b.document.id === u.id));
     for (const b of change.entityBindings ?? []) {
@@ -435,6 +450,24 @@ export const migrations: readonly Migration[] = [
       create index intents_waiting on mandate.intents (brief_by) where life = 'passed';
       create index intents_under_way on mandate.intents (life) where life = 'active';`,
   },
+  {
+    // An intent's discussion (MB2): kept by the thing it's about, as AUGUR names things (ADR 0028), so it can move to the platform later.
+    id: '004_discussion',
+    sql: `
+      create table mandate.messages (
+        id text primary key,
+        ref_app text not null,
+        ref_type text not null,
+        ref_id text not null,
+        kind text not null check (kind in ('concern', 'answer', 'note')),
+        words text not null,
+        answers text references mandate.messages (id),
+        by_person text not null,
+        by_name text not null default '',
+        at timestamptz not null default now()
+      );
+      create index messages_ref on mandate.messages (ref_app, ref_type, ref_id, at);`,
+  },
 ];
 
 export const INTENT_COLUMNS = `id, parent_id, root_id, ancestors, workspace_id, floor_principal, floor_kind, floor_name, holder, holder_name, title, life, version, draft,
@@ -560,6 +593,11 @@ export class PgMandateStore implements MandateStore {
     return rows.map((r): Assessment => ({ id: r.id, intent: r.intent_id, by: r.by_person, byName: r.by_name, rating: r.rating, note: r.note, at: r.at.toISOString() }));
   }
 
+  async messages(intent: string) {
+    const { rows } = await this.pool.query("select * from mandate.messages where ref_app = 'mandate' and ref_type = 'intent' and ref_id = $1 order by at, id", [intent]);
+    return rows.map((r): Message => ({ id: r.id, intent: r.ref_id, kind: r.kind, words: r.words, ...opt('answers', r.answers as string | null), by: r.by_person, byName: r.by_name, at: r.at.toISOString() }));
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a pg row, typed by the query that read it
   private static entityRow = (r: Record<string, any>): EntityBinding => ({
     intent: r.intent_id,
@@ -621,7 +659,8 @@ export class PgMandateStore implements MandateStore {
              briefed_parent_version, main_effort, by_date, rhythm_days, rating, rating_note, rated_at, created_by, created_by_name, passed_by, passed_by_name, passed_at,
              ended_at, ended_reason, created_at, updated_at, needs_holder, needs_holder_since, brief_by, rhythm)
            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
-           on conflict (id) do update set floor_name = excluded.floor_name, needs_holder = excluded.needs_holder, needs_holder_since = excluded.needs_holder_since,
+           on conflict (id) do update set parent_id = excluded.parent_id, root_id = excluded.root_id, ancestors = excluded.ancestors, workspace_id = excluded.workspace_id,
+             floor_principal = excluded.floor_principal, floor_kind = excluded.floor_kind, floor_name = excluded.floor_name, needs_holder = excluded.needs_holder, needs_holder_since = excluded.needs_holder_since,
              passed_by = excluded.passed_by, passed_by_name = excluded.passed_by_name, passed_at = excluded.passed_at, holder = excluded.holder, holder_name = excluded.holder_name, title = excluded.title, life = excluded.life,
              version = excluded.version, draft = excluded.draft, briefed_parent_version = excluded.briefed_parent_version, main_effort = excluded.main_effort,
              by_date = excluded.by_date, rhythm_days = excluded.rhythm_days, rating = excluded.rating, rating_note = excluded.rating_note, rated_at = excluded.rated_at,
@@ -647,6 +686,11 @@ export class PgMandateStore implements MandateStore {
         );
       for (const a of change.assessments ?? [])
         await client.query('insert into mandate.assessments (id, intent_id, by_person, by_name, rating, note, at) values ($1,$2,$3,$4,$5,$6,$7)', [a.id, a.intent, a.by, a.byName, a.rating, a.note, a.at]);
+      for (const m of change.messages ?? [])
+        await client.query(
+          "insert into mandate.messages (id, ref_app, ref_type, ref_id, kind, words, answers, by_person, by_name, at) values ($1, 'mandate', 'intent', $2, $3, $4, $5, $6, $7, $8)",
+          [m.id, m.intent, m.kind, m.words, m.answers ?? null, m.by, m.byName, m.at],
+        );
       for (const u of change.unbindEntities ?? [])
         await client.query('delete from mandate.entity_bindings where intent_id = $1 and entity_id = $2 and role = $3', [u.intent, u.entity, u.role]);
       for (const u of change.unbindDocuments ?? [])

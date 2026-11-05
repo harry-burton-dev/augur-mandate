@@ -51,6 +51,24 @@
 .mandate-judgement {
   margin: 0;
 }
+.mandate-discussion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.mandate-messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.mandate-message {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
 .mandate-tree {
   list-style: none;
   margin: 0;

@@ -101,6 +101,7 @@ const DETAIL = {
     withdraw: true,
     mainEffort: false,
     passAgain: false,
+    revisePart: false,
   },
 };
 
@@ -156,6 +157,13 @@ const service = vi.fn(async (input: RequestInfo | URL) => {
       floor: { active: 1, atRisk: 1, blocked: 0 },
     });
   if (path.endsWith('/v1/intents/a1')) return Response.json(DETAIL);
+  if (path.endsWith('/v1/threads'))
+    return Response.json({
+      ref: { kind: 'ref', app: 'mandate', type: 'intent', id: 'a1' },
+      messages: [{ id: 'm1', kind: 'concern', words: 'No dry dock is free this week.', byName: 'Jo Hart', at: new Date().toISOString() }],
+      waiting: { concern: 'm1', on: 'Dana Reyes' },
+      can: { write: true, kinds: ['note', 'answer'] },
+    });
   if (path.endsWith('/v1/intents/a2')) return Response.json(ORPHAN);
   return new Response(null, { status: 404 });
 });
@@ -244,6 +252,14 @@ describe('mandate', () => {
     expect(el.textContent).toContain('Jo Hart no longer holds this: they left');
     expect(el.textContent).toContain('HMS Example (retired in Data Atlas)');
     expect(button(el, 'Pass it again')).toBeDefined();
+  });
+
+  it('shows a part’s discussion, and what waits for an answer', async () => {
+    const { el } = await mounted('/intents/a1');
+    expect(el.querySelector('#discussion')!.textContent).toContain('No dry dock is free this week.');
+    expect(el.textContent).toContain('Concern · Jo Hart');
+    expect(el.textContent).toContain('Waiting for an answer from Dana Reyes.');
+    expect(button(el, 'Write')!.getAttribute('aria-disabled')).not.toBe('true');
   });
 
   it('says a refusal in the service’s own words', async () => {
