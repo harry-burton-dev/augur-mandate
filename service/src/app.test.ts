@@ -95,6 +95,15 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect((await t.call(callerHeaders({ ...sam, workspace: undefined }), 'GET', '/floor')).status).toBe(400);
   });
 
+  it('answers a refusal as problem details, named from its manifest', async () => {
+    const res = await t.app.inject({ method: 'GET', url: '/v1/floor' });
+    expect(res.statusCode).toBe(401);
+    expect(res.headers['content-type']).toContain('application/problem+json');
+    expect(res.json()).toMatchObject({ status: 401, reason: 'unauthenticated', error: 'unauthenticated', detail: 'Sign in to use Mandate.' });
+    const refused = await t.app.inject({ method: 'POST', url: '/v1/intents', headers: engMember('sam'), payload: { title: 'Mine' } });
+    expect(refused.json()).toMatchObject({ status: 403, error: 'forbidden', message: expect.any(String) });
+  });
+
   it('lets a floor’s leads set intent there, and anyone on their own floor', async () => {
     expect((await t.call(engMember('sam'), 'POST', '/intents', { title: 'Mine' })).status).toBe(403);
     expect((await t.call(engMember('sam'), 'GET', '/floor')).body.can.create).toBe(false);
