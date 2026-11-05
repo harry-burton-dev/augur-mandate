@@ -64,11 +64,11 @@ export const makeFollower = ({ app, store, people, audit, notify, inbox, now = (
   const event = (topic: string, i: Intent, payload: Record<string, unknown> = {}): OutboxEvent => ({ topic, workspace: i.workspace, payload: { intent: i.id, ...payload } });
 
   /** Who passed a part down, or else the leads of the floor above: they pass it again. */
-  const askToPassAgain = async (part: Intent, parent: Intent | undefined, n: NeedsHolder) => {
+  const askToPassAgain = async (part: Intent, parent: Intent | undefined, n: NeedsHolder, handOver?: string) => {
     const giver = part.passedBy ?? (parent ? personOf(parent.holder) : undefined);
     const owner = giver ? ({ kind: 'person', id: giver } as const) : parent ? ({ kind: 'team', id: parent.workspace, role: 'lead' } as const) : undefined;
     if (!owner) return;
-    const words = needsHolderWords(part, n);
+    const words = `${needsHolderWords(part, n)}${handOver ? ` They handed their work over to ${handOver}.` : ''}`;
     await inbox.put(needsHolderKey(part.id), parent?.workspace ?? part.workspace, {
       kind: INBOX_KINDS.needsHolder,
       owner,
@@ -84,7 +84,7 @@ export const makeFollower = ({ app, store, people, audit, notify, inbox, now = (
   };
 
   /** Marks open parts as needing a holder. Parts already marked keep the first reason and date. */
-  const loseHolder = async (parts: Intent[], why: NeedsHolder['why']) => {
+  const loseHolder = async (parts: Intent[], why: NeedsHolder['why'], handOver?: string) => {
     const at = now().toISOString();
     const open = parts.filter((i) => !ended(i) && !i.needsHolder && i.parent);
     if (!open.length) return;
@@ -93,11 +93,15 @@ export const makeFollower = ({ app, store, people, audit, notify, inbox, now = (
     const parents = new Map((await store.intents([...new Set(marked.map((i) => i.parent!))])).map((p) => [p.id, p]));
     for (const i of marked) {
       await audit({ actor: app.id, service: true, action: 'intent.needs-holder', target: i.id, workspace: i.workspace, detail: { title: i.title, holder: i.holder, why } });
-      await askToPassAgain(i, parents.get(i.parent!), i.needsHolder!);
+      await askToPassAgain(i, parents.get(i.parent!), i.needsHolder!, handOver);
     }
   };
 
-  const personGone = async (person: string, why: NeedsHolder['why']) => loseHolder(await store.heldBy(person), why);
+  /** Someone gone: what they held needs a new holder. A leaver's handover is named, as a suggestion, never passed on unasked. */
+  const personGone = async (person: string, why: NeedsHolder['why'], handOverTo?: string) => {
+    const handOver = handOverTo ? (await people.directory({ ids: [handOverTo] }).catch(() => ({ people: [] as { id: string; name: string }[] }))).people.find((p) => p.id === handOverTo)?.name : undefined;
+    return loseHolder(await store.heldBy(person), why, handOver);
+  };
 
   /** Signed back in: what they held and nobody has taken on is theirs again. */
   const personBack = async (person: string) => {
@@ -171,7 +175,7 @@ export const makeFollower = ({ app, store, people, audit, notify, inbox, now = (
       case PLATFORM_TOPICS.personDisabled:
         return person && personGone(person, 'disabled');
       case PLATFORM_TOPICS.personLeft:
-        return person && personGone(person, 'left');
+        return person && personGone(person, 'left', text(p, 'handOverTo'));
       case PLATFORM_TOPICS.personEnabled:
         return person && personBack(person);
       case PLATFORM_TOPICS.memberRemoved:

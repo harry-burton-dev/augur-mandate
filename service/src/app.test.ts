@@ -293,7 +293,8 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
   it('passes a part again to someone new, who says it back before it’s under way', async () => {
     const { sam } = await alpha(t.call);
     expect((await t.call(engLead, 'POST', `/intents/${sam.id}/pass-again`, { to: 'person:dana' })).body.error).toBe('not-now');
-    await t.follow({ topic: PLATFORM_TOPICS.personLeft, payload: { person: 'sam' } });
+    await t.follow({ topic: PLATFORM_TOPICS.personLeft, payload: { person: 'sam', handOverTo: 'dana' } });
+    expect(t.inbox.get(`needs-holder/${sam.id}`)?.item.detail).toContain('They handed their work over to Dana Ross.');
     // Only whoever passed it down, or a lead of the floor above.
     expect((await t.call(engMember('sam'), 'POST', `/intents/${sam.id}/pass-again`, { to: 'person:dana' })).status).toBe(403);
     expect((await t.call(engLead, 'POST', `/intents/${sam.id}/pass-again`, { to: 'person:priya' })).body.error).toBe('bad-target');
