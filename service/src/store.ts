@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
-import { steadyPool } from '@augur/service-kit';
+import { runMigrations, steadyPool, type Migration } from '@augur/service-kit';
 import type * as Wire from './api-types.ts';
 
 /**
@@ -255,7 +255,7 @@ export class MemoryMandateStore implements MandateStore {
 }
 
 /** Mandate's schema, oldest first. Once released, a migration never changes (scripts/check-migrations.mjs). */
-export const migrations: { id: string; sql: string }[] = [
+export const migrations: readonly Migration[] = [
   {
     id: '001_intents',
     sql: `
@@ -439,29 +439,9 @@ export class PgMandateStore implements MandateStore {
     return steadyPool(new pg.Pool({ connectionString, max: 2, options: '-c search_path=mandate' }));
   }
 
-  /** Brings the schema up to date. Safe to run from several instances at once. */
+  /** Brings the schema up to date. Safe to run from several instances at once (the service kit's runMigrations). */
   async migrate() {
-    const client = await this.pool.connect();
-    try {
-      await client.query('begin');
-      await client.query("select pg_advisory_xact_lock(hashtext('mandate.migrate'))");
-      // On a server the platform makes the schema for Mandate's login, which may not create schemas itself.
-      const { rowCount } = await client.query("select 1 from pg_namespace where nspname = 'mandate'");
-      if (!rowCount) await client.query('create schema mandate');
-      await client.query('create table if not exists mandate.migrations (id text primary key, applied_at timestamptz not null default now())');
-      const { rows } = await client.query<{ id: string }>('select id from mandate.migrations');
-      const applied = new Set(rows.map((r) => r.id));
-      for (const m of migrations.filter((m) => !applied.has(m.id))) {
-        await client.query(m.sql);
-        await client.query('insert into mandate.migrations (id) values ($1)', [m.id]);
-      }
-      await client.query('commit');
-    } catch (err) {
-      await client.query('rollback');
-      throw err;
-    } finally {
-      client.release();
-    }
+    await runMigrations(this.pool, { schema: 'mandate', migrations });
   }
 
   async close() {

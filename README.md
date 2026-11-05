@@ -10,7 +10,7 @@ Intent, passed down floor by floor: the intent pillar app. It lives in its own r
 | `frontend/` | The micro frontend the shell mounts at `/mandate` (`@apps/mandate-frontend`) |
 | `service/` | The app's own API, reached through the gateway at `/api/mandate` (`@apps/mandate`) |
 
-In `service/src`: `store.ts` keeps intents (memory, or Postgres in schema `mandate`), `rules.ts` says who sees and does what, `app.ts` is the API, and `inbox.ts` puts a part's back-brief in the shell's Inbox of whoever holds it (the person, or the team's leads) until it's said back, which needs the `inbox:write` scope an admin allows in Admin, Apps.
+In `service/src`: `index.ts` starts it with the service kit's app-service starter (`startAppService`: settings checked, jobs, frontend, registration, shutdown), `store.ts` keeps intents (memory, or Postgres in schema `mandate`), `rules.ts` says who sees and does what, `app.ts` is the API, and `inbox.ts` puts a part's back-brief in the shell's Inbox of whoever holds it (the person, or the team's leads) until it's said back, which needs the `inbox:write` scope an admin allows in Admin, Apps.
 
 Set `NODE_AUTH_TOKEN` to a token that can read GitHub Packages, then `pnpm install`, `pnpm test` and `pnpm build`. Test the service on Postgres too with `DATABASE_URL=… pnpm --filter @apps/mandate test`. AUGUR's `docs/build-an-app.md` covers running it in a shell.
 

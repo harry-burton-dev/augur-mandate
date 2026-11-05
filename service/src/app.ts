@@ -1,5 +1,17 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
-import { callerCheckFromEnv, callerFromHeaders, health, packageVersion, PeopleUnavailable, signedCallers, type CallerCheck, type CallerWorkspace, type NewInboxItem } from '@augur/service-kit';
+import {
+  appServer,
+  floorCaller,
+  packageVersion,
+  PeopleUnavailable,
+  Problem,
+  readManifest,
+  sendProblem,
+  serviceFastifyOptions,
+  type AppManifest,
+  type CallerCheck,
+  type NewInboxItem,
+} from '@augur/service-kit';
 import type {
   AddDocumentBody,
   AssessBody,
@@ -49,6 +61,8 @@ const version = packageVersion(import.meta.url);
 export const MAX_DEPTH = 8;
 
 export interface Options {
+  /** Mandate's manifest; read from manifest.json by default. Its id and name are what Mandate calls itself. */
+  manifest?: AppManifest;
   /** Checks the caller the gateway signed for Mandate. In production it is on by default; in dev `x-user-*` headers are believed. */
   callers?: CallerCheck;
   store?: MandateStore;
@@ -124,8 +138,8 @@ const lifeWords: Record<Intent['life'], string> = { draft: 'Draft', passed: 'Wai
 
 const personOf = (holder: string) => (holder.startsWith('person:') ? holder.slice('person:'.length) : undefined);
 
-export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store = new MemoryMandateStore(), audit, notify, inbox, people = peopleFromEnv(), now = () => new Date() }: Options = {}) => {
-  const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
+export const buildApp = async ({ manifest = readManifest(import.meta.url), callers, store = new MemoryMandateStore(), audit, notify, inbox, people = peopleFromEnv(), now = () => new Date() }: Options = {}) => {
+  const app = Fastify(serviceFastifyOptions());
   const record = audit ?? auditFromEnv((entry) => app.log.info({ audit: entry }, 'audit (no audit log here)'));
   const tell = notify ?? notifyFromEnv((notice) => app.log.info({ notice }, 'notification (no notifications here)'));
   const recorded = (entry: Parameters<Audit>[0]) =>
@@ -143,7 +157,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       owner: person ? { kind: 'person', id: person } : { kind: 'team', id: part.workspace, role: 'lead' },
       title: part.title,
       detail,
-      subject: { kind: 'ref', app: 'mandate', type: 'intent', id: part.id, label: part.title },
+      subject: { kind: 'ref', app: manifest.id, type: 'intent', id: part.id, label: part.title },
       path: `/intents/${part.id}`,
       // Saying it back is Mandate's own step: a concern is raised there, not by declining.
       allow: { decline: false, handOn: false, selfComplete: false },
@@ -152,22 +166,21 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
     };
   };
 
-  // Only the gateway's signed word says who is calling: headers anyone could send are dropped.
-  app.addHook('onRequest', signedCallers(callers));
-  app.get('/healthz', async () => health('mandate', version, API_VERSION));
+  // Only the gateway's signed word says who is calling; every error is a problem details body; /healthz.
+  await appServer(app, { manifest, version, api: API_VERSION, ...(callers ? { callers } : {}) });
+  const floorOf = floorCaller(manifest);
 
   /** Who is calling, on which floor, and who they stand for; or a refusal already sent. Every intent lives on a floor. */
   const viewerOf = async (req: FastifyRequest, reply: FastifyReply): Promise<Viewer | undefined> => {
-    const caller = callerFromHeaders(req.headers);
-    if (!caller) {
-      reply.code(401).send({ error: 'unauthenticated', message: 'Sign in to use Mandate.' });
+    let caller;
+    try {
+      caller = floorOf(req);
+    } catch (err) {
+      if (!(err instanceof Problem)) throw err;
+      void sendProblem(reply, err);
       return undefined;
     }
-    if (!caller.workspace) {
-      reply.code(400).send({ error: 'floor-needed', message: 'Say which floor you’re on (X-Workspace-Id).' });
-      return undefined;
-    }
-    const workspace = caller.workspace as CallerWorkspace;
+    const { workspace } = caller;
     return { id: caller.id, name: caller.name, workspace, principals: await people.principals(caller.id, workspace) };
   };
 
@@ -178,7 +191,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
     const sight = sightOf(v, tree);
     const intent = tree.find((i) => i.id === id);
     if (!intent || sight.get(id) !== 'full') {
-      reply.code(404).send({ error: 'not-found', message: 'There’s no such intent, or it isn’t one you can read.' });
+      sendProblem(reply, 404, 'not-found', 'There’s no such intent, or it isn’t one you can read.');
       return undefined;
     }
     const byId = new Map(tree.map((i) => [i.id, i]));
@@ -187,8 +200,8 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
   };
   type Loaded = NonNullable<Awaited<ReturnType<typeof load>>>;
 
-  const refuse = (reply: FastifyReply, message: string) => reply.code(403).send({ error: 'forbidden', message });
-  const unfit = (reply: FastifyReply, message: string) => reply.code(409).send({ error: 'not-now', message });
+  const refuse = (reply: FastifyReply, message: string) => sendProblem(reply, 403, 'forbidden', message);
+  const unfit = (reply: FastifyReply, message: string) => sendProblem(reply, 409, 'not-now', message);
 
   /** The branches below an intent, as far as the viewer sees. */
   const branchesBelow = (id: string, tree: readonly Intent[], sight: Map<string, Sight>): Branch[] =>
@@ -214,7 +227,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       return true;
     } catch (err) {
       if (!(err instanceof ConflictError)) throw err;
-      reply.code(409).send({ error: 'changed', message: 'Someone else changed this intent just now. Reload it and try again.' });
+      sendProblem(reply, 409, 'changed', 'Someone else changed this intent just now. Reload it and try again.');
       return false;
     }
   };
@@ -293,7 +306,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
       app.setErrorHandler((err, req, reply) => {
         if (!(err instanceof PeopleUnavailable)) return reply.send(err);
         req.log.error({ err: err.message }, 'could not ask identity who the caller is');
-        return reply.code(503).send({ error: 'unavailable', message: 'Mandate can’t check who you are right now. Try again in a moment.' });
+        return sendProblem(reply, 503, 'unavailable', `${manifest.name} can’t check who you are right now. Try again in a moment.`);
       });
 
       // ---- a floor ----
@@ -409,7 +422,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
         if (!loaded) return reply;
         const { intent, tree } = loaded;
         if (!loaded.can.edit) return refuse(reply, 'Only whoever holds this intent can issue it.');
-        if (!intent.draft.purpose || !intent.draft.endState) return reply.code(400).send({ error: 'incomplete', message: 'Say its purpose and its end state before issuing it.' });
+        if (!intent.draft.purpose || !intent.draft.endState) return sendProblem(reply, 400, 'incomplete', 'Say its purpose and its end state before issuing it.');
         const at = stamp();
         const number = intent.version + 1;
         const next: Intent = { ...intent, version: number, life: intent.life === 'draft' ? 'active' : intent.life, updatedAt: at };
@@ -507,12 +520,12 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
           let place: Pick<Intent, 'workspace' | 'floor' | 'floorKind' | 'floorName' | 'holder' | 'holderName'>;
           if (kind === 'team') {
             const team = (await people.directory({ ids: [target] })).teams.find((t) => t.id === target);
-            if (!team || !directlyBelow(intent, team.path)) return reply.code(400).send({ error: 'bad-target', message: 'Pass a part to a team directly below this floor, or to someone on it.' });
+            if (!team || !directlyBelow(intent, team.path)) return sendProblem(reply, 400, 'bad-target', 'Pass a part to a team directly below this floor, or to someone on it.');
             place = { workspace: team.id, floor: `tree:${team.id}`, floorKind: 'team', floorName: team.name, holder: 'floor', holderName: team.name };
           } else {
             const name = target === v.id ? v.name : (await people.directory({ ids: [target] })).people.find((p) => p.id === target)?.name;
             if (!name || (target !== v.id && !(await onFloorOfIntent(target, intent))))
-              return reply.code(400).send({ error: 'bad-target', message: 'Pass a part to a team directly below this floor, or to someone on it.' });
+              return sendProblem(reply, 400, 'bad-target', 'Pass a part to a team directly below this floor, or to someone on it.');
             place = { workspace: intent.workspace, floor: intent.floor, floorKind: intent.floorKind, floorName: intent.floorName, holder: `person:${target}`, holderName: name };
           }
           const at = stamp();
@@ -596,7 +609,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
           const { intent, parent } = loaded;
           if (!loaded.can.backBrief) return refuse(reply, 'Only whoever holds this part can back-brief it, while it waits for one.');
           const concern = (req.body.concern ?? '').trim();
-          if (req.body.outcome === 'concern' && !concern) return reply.code(400).send({ error: 'incomplete', message: 'Say what doesn’t fit.' });
+          if (req.body.outcome === 'concern' && !concern) return sendProblem(reply, 400, 'incomplete', 'Say what doesn’t fit.');
           const at = stamp();
           const accepted = req.body.outcome === 'accepted';
           const next: Intent = {
@@ -810,7 +823,7 @@ export const buildApp = async ({ callers = callerCheckFromEnv('mandate'), store 
           const within = tree.filter((i) => (i.id === intent.id || (i.ancestors.includes(intent.id) && i.ancestors.length - intent.ancestors.length <= depth)) && sight.get(i.id) === 'full' && !ended(i));
           const ids = within.map((i) => i.id);
           const [entities, documents, versions] = await Promise.all([store.entityBindings(ids), store.documentBindings(ids), store.versions(intent.id)]);
-          const ref = (i: Intent) => ({ kind: 'intent' as const, app: 'mandate', id: i.id, title: i.title });
+          const ref = (i: Intent) => ({ kind: 'intent' as const, app: manifest.id, id: i.id, title: i.title });
           return {
             intent: ref(intent),
             statement: versions[0]?.statement ?? intent.draft,
