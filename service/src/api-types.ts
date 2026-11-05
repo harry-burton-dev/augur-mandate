@@ -130,6 +130,8 @@ export interface Rights {
   withdraw: boolean;
   /** Pass it to someone new, once its holder no longer can: whoever passed it down, or the leads of the floor above. */
   passAgain: boolean;
+  /** Change what was passed down, while it waits for its back-brief: whoever passed it down. */
+  revisePart: boolean;
   /** Mark it the main effort among its siblings: its parent's holder. */
   mainEffort: boolean;
 }
@@ -175,6 +177,8 @@ export interface Detail {
   documents: { document: DocumentRef; from?: string; at: string }[];
   recheck: boolean;
   assessmentDue: boolean;
+  /** It stood alone when the intent it was part of closed: that intent's title, and when. */
+  stoodAlone?: { from: string; at: string };
   can: Rights;
 }
 
@@ -226,6 +230,50 @@ export interface PassAgainBody {
   to: string;
 }
 
+/** What a discussion holds: a concern the holder raises, the giver's answer to one, or a note from either side. */
+export type MessageKind = 'concern' | 'answer' | 'note';
+
+/** One message in an intent's discussion. Never changed once sent. */
+export interface Message {
+  id: string;
+  kind: MessageKind;
+  words: string;
+  byName: string;
+  at: string;
+  /** The concern an answer answers. */
+  answers?: string;
+}
+
+/** A thing a discussion is about, as AUGUR names things across apps (the SDK's Ref, ADR 0028). Only Mandate's intents for now. */
+export interface ThreadRef {
+  kind: 'ref';
+  app: string;
+  type: string;
+  id: string;
+}
+
+/** `GET /threads`: an intent's discussion, oldest first, and what the person may write in it. */
+export interface Thread {
+  ref: ThreadRef;
+  messages: Message[];
+  /** The concern still waiting for an answer, and who answers it. */
+  waiting?: { concern: string; on: string };
+  can: { write: boolean; kinds: MessageKind[]; why?: string };
+}
+
+/** `POST /threads/messages`. */
+export interface MessageBody {
+  ref: ThreadRef;
+  kind: MessageKind;
+  words: string;
+}
+
+/** `PATCH /intents/:id/passed`: what the giver changes in a part that waits for its back-brief. */
+export interface RevisePartBody {
+  title?: string;
+  purpose?: string;
+}
+
 /** `POST /intents/:id/back-brief`. */
 export interface BackBriefBody {
   words: string;
@@ -239,9 +287,18 @@ export interface AssessBody {
   note?: string;
 }
 
+/** What happens to the open parts below an intent that closes: they close with it (as before), or stand alone. */
+export type CloseChoice = 'close' | 'stand-alone';
+
+/** `POST /intents/:id/achieve`. */
+export interface AchieveBody {
+  parts?: CloseChoice;
+}
+
 /** `POST /intents/:id/withdraw`. */
 export interface WithdrawBody {
   reason?: string;
+  parts?: CloseChoice;
 }
 
 /** `POST /intents/:id/main-effort`. */
@@ -295,10 +352,13 @@ export interface MandatePaths {
   '/intents/{id}/issue': { post: Call<Detail, { path: ById }> };
   '/intents/{id}/targets': { get: Call<Targets, { path: ById; query: { q?: string } }> };
   '/intents/{id}/pass': { post: Made<Summary, { path: ById; body: PassBody }> };
+  '/threads': { get: Call<Thread, { query: { app: string; type: string; id: string } }> };
+  '/threads/messages': { post: Made<Message, { body: MessageBody }> };
+  '/intents/{id}/passed': { patch: Call<Detail, { path: ById; body: RevisePartBody }> };
   '/intents/{id}/pass-again': { post: Call<Detail, { path: ById; body: PassAgainBody }> };
   '/intents/{id}/back-brief': { post: Call<Detail, { path: ById; body: BackBriefBody }> };
   '/intents/{id}/assess': { post: Call<Detail, { path: ById; body: AssessBody }> };
-  '/intents/{id}/achieve': { post: Call<Detail, { path: ById }> };
+  '/intents/{id}/achieve': { post: Call<Detail, { path: ById; body: AchieveBody }> };
   '/intents/{id}/withdraw': { post: Call<Detail, { path: ById; body: WithdrawBody }> };
   '/intents/{id}/main-effort': { post: Call<Detail, { path: ById; body: MainEffortBody }> };
   '/intents/{id}/entities': { post: Call<Detail, { path: ById; body: BindEntityBody }> };

@@ -1,7 +1,7 @@
 import { AppError, createAppClient, type AppClient, type AppFetcher } from '@augur/app-kit';
 import type { DocumentRef, EntityRef } from '@augur/mfe-sdk';
 import manifest from '../../manifest.json';
-import type { EditBody, MandatePaths, PassBody, BackBriefBody, Rating } from '../../service/src/api-types.js';
+import type { CloseChoice, EditBody, MandatePaths, MessageKind, PassBody, BackBriefBody, Rating, RevisePartBody } from '../../service/src/api-types.js';
 
 export type { EntityRef };
 // The wire types are written once, in the service's api-types.ts, and shared with it.
@@ -9,12 +9,15 @@ export type {
   Assessment,
   BackBrief,
   Branch,
+  CloseChoice,
   Detail,
   Floor,
   FloorItem,
   FloorKind,
   HomeGlance,
   Life,
+  Message,
+  MessageKind,
   NeedsHolder,
   Rating,
   Rights,
@@ -74,6 +77,15 @@ export class MandateApi {
   search(q: string) {
     return asked(this.client.get('/search', { query: { q } }));
   }
+  thread(id: string, signal?: AbortSignal) {
+    return asked(this.client.get('/threads', { query: { app: manifest.id, type: 'intent', id }, signal }));
+  }
+  say(id: string, kind: MessageKind, words: string) {
+    return asked(this.client.post('/threads/messages', { body: { ref: { kind: 'ref', app: manifest.id, type: 'intent', id }, kind, words } }));
+  }
+  revisePart(id: string, change: RevisePartBody) {
+    return asked(this.client.patch('/intents/{id}/passed', { params: { id }, body: change }));
+  }
   intent(id: string, signal?: AbortSignal) {
     return asked(this.client.get('/intents/{id}', { params: { id }, signal }));
   }
@@ -101,11 +113,11 @@ export class MandateApi {
   assess(id: string, rating: Rating, note: string) {
     return asked(this.client.post('/intents/{id}/assess', { params: { id }, body: { rating, note } }));
   }
-  achieve(id: string) {
-    return asked(this.client.post('/intents/{id}/achieve', { params: { id } }));
+  achieve(id: string, parts: CloseChoice = 'close') {
+    return asked(this.client.post('/intents/{id}/achieve', { params: { id }, body: { parts } }));
   }
-  withdraw(id: string, reason: string) {
-    return asked(this.client.post('/intents/{id}/withdraw', { params: { id }, body: { reason } }));
+  withdraw(id: string, reason: string, parts: CloseChoice = 'close') {
+    return asked(this.client.post('/intents/{id}/withdraw', { params: { id }, body: { reason, parts } }));
   }
   mainEffort(id: string, on: boolean) {
     return asked(this.client.post('/intents/{id}/main-effort', { params: { id }, body: { on } }));

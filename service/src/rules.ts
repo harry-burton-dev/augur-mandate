@@ -1,4 +1,4 @@
-import type { Rights, Sight } from './api-types.ts';
+import type { MessageKind, Rights, Sight } from './api-types.ts';
 import { ENDED, type Intent } from './store.ts';
 
 /**
@@ -89,7 +89,27 @@ export const rightsOn = (v: Viewer, i: Intent, parent: Intent | undefined): Righ
     withdraw: giver,
     mainEffort: Boolean(parent) && giver && !ended(i),
     passAgain: Boolean(parent && i.needsHolder) && !ended(i) && (giver || i.passedBy === v.id || leadOn(v, parent!)),
+    revisePart: Boolean(parent) && gives(v, i, parent) && i.life === 'passed' && !ended(i),
   };
+};
+
+/** They passed this part down, or may act for whoever holds the intent above it. */
+export const gives = (v: Viewer, i: Intent, parent: Intent | undefined) => Boolean(parent) && (holds(v, parent!) || i.passedBy === v.id);
+
+/**
+ * What the viewer may write in an intent's discussion, and why not when nothing: whoever holds it raises
+ * concerns and leaves notes, whoever passed it down answers and leaves notes. A closed intent's discussion is closed.
+ */
+export const discussing = (v: Viewer, i: Intent, parent: Intent | undefined, concernOpen: boolean): { kinds: MessageKind[]; why?: string } => {
+  if (ended(i)) return { kinds: [], why: 'It’s closed, so its discussion is too.' };
+  const kinds = new Set<MessageKind>();
+  // A concern goes to whoever passed it down, so an intent set on its own floor takes notes only.
+  if (amongHolders(v, i)) for (const k of parent ? (['note', 'concern'] as const) : (['note'] as const)) kinds.add(k);
+  if (gives(v, i, parent)) {
+    kinds.add('note');
+    if (concernOpen) kinds.add('answer');
+  }
+  return kinds.size ? { kinds: [...kinds] } : { kinds: [], why: 'Only the people holding this part and whoever passed it down write here.' };
 };
 
 /** Whether someone standing on this floor may set a new intent on it: its leads, or anyone on their own floor. */
