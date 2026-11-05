@@ -225,7 +225,8 @@ describe.runIf(process.env.DATABASE_URL)('reminders on Postgres', () => {
     await reminders.close();
     await store.close();
     await db.end();
-    await admin.query(`drop database if exists ${name} with (force)`);
+    // Left for the next run's beforeAll to drop: dropping it here, with force, can cut a connection that is
+    // still closing, which then throws outside any test.
     await admin.end();
   });
   reminds(async () => {
