@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@augur/app-kit": "npm:@harry-burton-dev/augur-app-kit@^0.7.0",
-    "@augur/mfe-sdk": "npm:@harry-burton-dev/augur-mfe-sdk@^2.0.0",
+    "@augur/mfe-sdk": "npm:@harry-burton-dev/augur-mfe-sdk@^2.1.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
