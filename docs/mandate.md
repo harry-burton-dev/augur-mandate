@@ -49,6 +49,15 @@ Mandate follows the platform (the `events:subscribe` scope):
 | Data Atlas retires an entity | Its chips on intents say "(retired in Data Atlas)" |
 | Data Atlas merges an entity | Its bindings move to the survivor, saying where they came from; a split moves them back |
 
+### What waits in the Inbox, and what's only news
+
+When someone has to act, Mandate puts it in their Inbox and doesn't also send a notification that needs them
+(AUGUR's ADR 0090): a part passed to them, passed to them again, changed while it waits, or an intent above it
+issued again, and a part that needs a holder. A notification still says what happened, as news, so it shows in
+their notifications and their digest, but it isn't emailed on its own. A concern raised, a concern written in the
+discussion, and a part said to be blocked or achieved stay notifications that need whoever passed it down, since
+nothing waits in their Inbox until the concern reminder (below).
+
 ## Reminders
 
 A sweep runs every 15 minutes, once across every instance, and puts what has come due in the Inbox

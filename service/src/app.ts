@@ -484,7 +484,6 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
               workspace: part.workspace,
               title: `${intent.title} has changed`,
               detail: `It’s at version ${number}. Check “${part.title}” still fits, and say so.`,
-              needsYou: true,
               link: `/intents/${part.id}`,
             });
         if (number > 1)
@@ -625,7 +624,6 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
             workspace: part.workspace,
             title: `${v.name} passed you “${part.title}”`,
             detail: kind === 'team' ? `Part of ${intent.title}. A lead of ${part.floorName} says it back to accept it.` : `Part of ${intent.title}. Say it back in your own words to accept it.`,
-            needsYou: true,
             link: `/intents/${id}`,
           });
           await waiting(backBriefKey(id), part.workspace, backBriefItem(part, `Part of ${intent.title}. Say it back in your own words to accept it.`, v.id));
@@ -662,7 +660,6 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
             workspace: next.workspace,
             title: `${v.name} passed you “${next.title}”`,
             detail: `Part of ${parent.title}, held before by ${intent.holderName}. Say it back in your own words to accept it.`,
-            needsYou: true,
             link: `/intents/${next.id}`,
           });
           await waiting(backBriefKey(next.id), next.workspace, backBriefItem(next, `Part of ${parent.title}. Say it back in your own words to accept it.`, v.id, true));
@@ -852,7 +849,6 @@ export const buildApp = async ({ manifest = readManifest(import.meta.url), calle
             workspace: next.workspace,
             title: `${v.name} changed “${title}”`,
             detail: `Read what changed, then say it back to accept it.`,
-            needsYou: true,
             link: `/intents/${intent.id}`,
           });
           await waiting(backBriefKey(intent.id), intent.workspace, backBriefItem(next, `${v.name} changed what was passed. Say it back in your own words to accept it.`, v.id, true));
