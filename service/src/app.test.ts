@@ -148,7 +148,10 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect(targets.teams.map((x: { name: string }) => x.name)).toEqual(['Engineering']);
     const eng = (await t.call(orgLead, 'POST', `/intents/${op.id}/pass`, { to: `team:${ENG}`, title: 'Keep the ships at sea', purpose: 'They keep the route open' })).body;
     expect(eng).toMatchObject({ life: 'passed', floorName: 'Engineering', holder: 'floor' });
-    expect(t.notices.at(-1)).toMatchObject({ recipients: ['dana', 'sam'], needsYou: true, link: `/intents/${eng.id}` });
+    expect(t.notices.at(-1)).toMatchObject({ recipients: ['dana', 'sam'], link: `/intents/${eng.id}` });
+    // The back-brief waits in their Inbox, so the notice is news, not a second ask (AUGUR's ADR 0090).
+    expect(t.notices.at(-1)?.needsYou).toBeFalsy();
+    expect(t.inbox.get(`back-brief/${eng.id}`)?.state).toBe('open');
     // A member reads it, but a lead back-briefs for the team.
     expect((await t.call(engMember('sam'), 'POST', `/intents/${eng.id}/back-brief`, { words: 'ok', outcome: 'accepted' })).status).toBe(403);
     expect((await t.call(engLead, 'GET', '/me')).body.passed.map((x: { title: string }) => x.title)).toEqual(['Keep the ships at sea']);
@@ -217,7 +220,8 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     const { op, eng } = await alpha(t.call);
     await t.call(orgLead, 'PATCH', `/intents/${op.id}`, { statement: { endState: 'Three ships on station.' } });
     await t.call(orgLead, 'POST', `/intents/${op.id}/issue`);
-    expect(t.notices.at(-1)).toMatchObject({ recipients: ['dana', 'sam'], title: 'Operation Alpha has changed', needsYou: true });
+    expect(t.notices.at(-1)).toMatchObject({ recipients: ['dana', 'sam'], title: 'Operation Alpha has changed' });
+    expect(t.notices.at(-1)?.needsYou).toBeFalsy();
     const seen = (await t.call(engLead, 'GET', `/intents/${eng.id}`)).body;
     expect(seen).toMatchObject({ recheck: true, can: { backBrief: true } });
     expect((await t.call(engLead, 'GET', '/me')).body.recheck.map((x: { title: string }) => x.title)).toEqual(['Keep Halcyon and Corran at sea']);
@@ -283,6 +287,7 @@ const behaves = (make: () => Promise<{ store: MandateStore; outbox: () => Promis
     expect(part.can.passAgain).toBe(true);
     expect(t.inbox.get(`needs-holder/${sam.id}`)).toMatchObject({ state: 'open', item: { kind: 'needs-holder', owner: { kind: 'person', id: 'dana' } } });
     expect(t.notices.filter((n) => n.title.includes('needs a holder'))).toHaveLength(1);
+    expect(t.notices.find((n) => n.title.includes('needs a holder'))?.needsYou).toBeFalsy();
     expect((await t.outbox()).filter((e) => e.topic === TOPICS.needsHolder)).toHaveLength(1);
     // Signed back in before anyone else took it on: it's theirs again.
     await t.follow({ topic: PLATFORM_TOPICS.personEnabled, payload: { person: 'sam' } });

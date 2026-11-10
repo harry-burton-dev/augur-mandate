@@ -80,7 +80,7 @@ export const makeFollower = ({ app, store, people, audit, notify, inbox, now = (
       allow: { decline: false, handOn: false, selfComplete: false },
       reopen: true,
     });
-    if (giver) await notify({ recipients: [giver], workspace: parent?.workspace ?? part.workspace, title: `“${part.title}” needs a holder`, detail: words, needsYou: true, link: `/intents/${part.id}` });
+    if (giver) await notify({ recipients: [giver], workspace: parent?.workspace ?? part.workspace, title: `“${part.title}” needs a holder`, detail: words, link: `/intents/${part.id}` });
   };
 
   /** Marks open parts as needing a holder. Parts already marked keep the first reason and date. */
