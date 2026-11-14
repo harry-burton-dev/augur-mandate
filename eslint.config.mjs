@@ -26,4 +26,19 @@ export default tseslint.config(
     // The two classic hooks rules. The React Compiler rules in the plugin's newer presets wait for the React move.
     rules: { 'react-hooks/rules-of-hooks': 'error', 'react-hooks/exhaustive-deps': 'warn' },
   },
+  {
+    // A pg Pool without an error listener ends the process when Postgres restarts (REVIEW.md): wrap it in
+    // steadyPool from @augur/service-kit. Tests' pools end with the test.
+    files: ['**/*.{ts,mts,cts,js,mjs,cjs}'],
+    ignores: ['**/*.test.*', '**/*.testing.ts', '**/test/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: ":matches(NewExpression[callee.property.name='Pool'], NewExpression[callee.name='Pool']):not(CallExpression[callee.name='steadyPool'] > NewExpression, CallExpression[callee.property.name='steadyPool'] > NewExpression)",
+          message: 'Wrap a new pg Pool in steadyPool() from @augur/service-kit, so a lost connection is logged instead of ending the process.',
+        },
+      ],
+    },
+  },
 );
